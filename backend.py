@@ -668,6 +668,7 @@ def _fetch_stock_data(ticker: str) -> dict:
         "catalyst_date": info.get("catalyst_date", ""),
         "catalyst_event": info.get("catalyst_event", ""),
         "catalyst_note": info.get("catalyst_note", ""),
+        "currency": info_raw.get("currency", "USD"),
         "price": round(current_price, 2),
         "change_pct": change_pct,
         "market_cap": market_cap,

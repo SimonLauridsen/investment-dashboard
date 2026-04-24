@@ -113,7 +113,7 @@
     </div>
     <div class="space-y-4">
       <div>
-        <label class="text-xs font-semibold mb-2 block" style="color:var(--muted)">PURCHASE PRICE (USD)</label>
+        <label id="modal-price-label" class="text-xs font-semibold mb-2 block" style="color:var(--muted)">PURCHASE PRICE (USD)</label>
         <input id="modal-price" type="number" step="0.01" class="input-field" placeholder="0.00"/>
       </div>
       <div>
@@ -121,7 +121,7 @@
         <input id="modal-date" type="date" class="input-field"/>
       </div>
       <div>
-        <label class="text-xs font-semibold mb-2 block" style="color:var(--muted)">SHARES <span style="font-weight:400;color:var(--muted)">(optional — for P&L in $)</span></label>
+        <label class="text-xs font-semibold mb-2 block" style="color:var(--muted)">SHARES <span id="modal-shares-label" style="font-weight:400;color:var(--muted)">(optional — for P&amp;L in $)</span></label>
         <input id="modal-shares" type="number" step="1" class="input-field" placeholder="e.g. 100"/>
       </div>
       <div>
@@ -343,7 +343,9 @@ async function fetchCustomList() {
 function signalStyle(o) {
   return ({'STRONG BUY':{bg:'rgba(0,255,136,.15)',color:'#00ff88',border:'rgba(0,255,136,.4)'},'BUY':{bg:'rgba(16,185,129,.15)',color:'#10b981',border:'rgba(16,185,129,.4)'},'HOLD':{bg:'rgba(245,158,11,.15)',color:'#f59e0b',border:'rgba(245,158,11,.4)'},'SELL':{bg:'rgba(239,68,68,.15)',color:'#ef4444',border:'rgba(239,68,68,.4)'},'STRONG SELL':{bg:'rgba(255,34,68,.15)',color:'#ff2244',border:'rgba(255,34,68,.4)'}})[o]||{bg:'rgba(245,158,11,.15)',color:'#f59e0b',border:'rgba(245,158,11,.4)'};
 }
-const fmtCap = n => !n?'N/A':n>=1e9?'$'+(n/1e9).toFixed(2)+'B':n>=1e6?'$'+(n/1e6).toFixed(1)+'M':'$'+n;
+const CURRENCY_SYM = {USD:'$',EUR:'€',GBP:'£',JPY:'¥',CAD:'C$',AUD:'A$',HKD:'HK$',NOK:'NOK ',DKK:'DKK ',SEK:'SEK ',CHF:'CHF '};
+const currSym = c => CURRENCY_SYM[c] || (c ? c+' ' : '$');
+const fmtCap = (n, sym='$') => !n?'N/A':n>=1e9?sym+(n/1e9).toFixed(2)+'B':n>=1e6?sym+(n/1e6).toFixed(1)+'M':sym+n;
 const rsiColor = r => r<=35?'#00ff88':r<=50?'#10b981':r<=65?'#f59e0b':'#ef4444';
 const daysUntil = d => { const a=new Date(d),b=new Date(); a.setHours(0,0,0,0); b.setHours(0,0,0,0); return Math.round((a-b)/86400000); };
 const tickerColor = t => tickerColorFromHash(t);
@@ -393,7 +395,8 @@ function computePosition(pos, price) {
 
 function exitReason(s, pm) {
   const sig = s.signal.overall;
-  if (pm.stopBreached) return { type:'STOP', msg:`Stop loss hit — entry $${pm.entry.toFixed(2)}, stop $${pm.stop.toFixed(2)}. Exit to protect capital.` };
+  const _sym = currSym(s.currency);
+  if (pm.stopBreached) return { type:'STOP', msg:`Stop loss hit — entry ${_sym}${pm.entry.toFixed(2)}, stop ${_sym}${pm.stop.toFixed(2)}. Exit to protect capital.` };
   if (pm.t3Hit && (sig==='SELL'||sig==='STRONG SELL')) return { type:'T3', msg:`+125% target reached and signal is ${sig}. Consider a full exit — the thesis may be priced in.` };
   if (pm.t2Hit && (sig==='SELL'||sig==='STRONG SELL')) return { type:'T2', msg:`+75% target reached and signal is ${sig}. Strong case to sell the remaining position.` };
   if (pm.t1Hit && sig==='STRONG SELL') return { type:'T1', msg:`+35% target reached with a strong sell signal. Consider selling half your position.` };
@@ -409,6 +412,9 @@ function openBuyModal(ticker) {
   const s = data[ticker];
   document.getElementById('modal-title').textContent    = `Record Purchase — ${ticker}`;
   document.getElementById('modal-subtitle').textContent = s?.name||'';
+  const _cur = s?.currency || 'USD';
+  document.getElementById('modal-price-label').textContent = `PURCHASE PRICE (${_cur})`;
+  document.getElementById('modal-shares-label').textContent = `(optional — for P&L in ${_cur})`;
   document.getElementById('modal-price').value  = s ? s.price.toFixed(2) : '';
   document.getElementById('modal-date').value   = new Date().toISOString().split('T')[0];
   document.getElementById('modal-shares').value = '';
@@ -592,6 +598,7 @@ function miniSparkline(id, chartData, color) {
 // ── Card renderer (shared) ────────────────────────────────────────────────────
 function buildCard(s, tab, isCustom) {
   const color    = tickerColor(s.ticker);
+  const sym      = currSym(s.currency);
   const sig      = s.signal;
   const ss       = signalStyle(sig.overall);
   const chgColor = s.change_pct>=0 ? '#10b981' : '#ef4444';
@@ -606,8 +613,8 @@ function buildCard(s, tab, isCustom) {
     const pc = pm.pnlPct>=0?'#10b981':'#ef4444';
     const ps = pm.pnlPct>=0?'+':'';
     posBadge = `<div class="flex items-center justify-between mt-2 px-2 py-1.5 rounded-lg" style="background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2)">
-      <div class="flex items-center gap-2"><span class="text-xs font-semibold" style="color:#10b981">HOLDING</span><span class="text-xs" style="color:var(--muted)">@ $${pm.entry.toFixed(2)}</span></div>
-      <span class="text-xs font-bold" style="color:${pc}">${ps}${pm.pnlPct.toFixed(1)}%${pm.pnlAbs!==null?' ($'+(pm.pnlAbs>=0?'+':'')+pm.pnlAbs.toFixed(0)+')':''}</span>
+      <div class="flex items-center gap-2"><span class="text-xs font-semibold" style="color:#10b981">HOLDING</span><span class="text-xs" style="color:var(--muted)">@ ${sym}${pm.entry.toFixed(2)}</span></div>
+      <span class="text-xs font-bold" style="color:${pc}">${ps}${pm.pnlPct.toFixed(1)}%${pm.pnlAbs!==null?' ('+sym+(pm.pnlAbs>=0?'+':'')+pm.pnlAbs.toFixed(0)+')':''}</span>
     </div>`;
     if (ex) exitBanner=`<div class="mt-2 px-2 py-1.5 rounded-lg text-xs font-bold" style="background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#ef4444">EXIT ALERT: ${ex.type}</div>`;
   }
@@ -630,7 +637,7 @@ function buildCard(s, tab, isCustom) {
         <div class="text-xs" style="color:var(--muted)">${s.name||''}</div>
       </div>
       <div class="text-right">
-        <div class="text-xl font-bold">$${s.price.toFixed(2)}</div>
+        <div class="text-xl font-bold">${sym}${s.price.toFixed(2)}</div>
         <div class="text-sm font-semibold" style="color:${chgColor}">${s.change_pct>=0?'▲':'▼'} ${Math.abs(s.change_pct)}%</div>
       </div>
     </div>
@@ -649,7 +656,7 @@ function buildCard(s, tab, isCustom) {
     <div class="grid grid-cols-3 gap-2 mb-2">
       <div class="text-center p-2 rounded-lg" style="background:var(--bg)"><div class="text-xs mb-1" style="color:var(--muted)">RSI</div><div class="font-semibold text-sm" style="color:${rsiColor(s.rsi)}">${s.rsi}</div></div>
       <div class="text-center p-2 rounded-lg" style="background:var(--bg)"><div class="text-xs mb-1" style="color:var(--muted)">MACD</div><div class="font-semibold text-sm" style="color:${s.macd_hist>=0?'#10b981':'#ef4444'}">${s.macd_hist>=0?'+':''}${s.macd_hist.toFixed(3)}</div></div>
-      <div class="text-center p-2 rounded-lg" style="background:var(--bg)"><div class="text-xs mb-1" style="color:var(--muted)">SMA50</div><div class="font-semibold text-sm" style="color:${s.price>s.sma50?'#10b981':'#ef4444'}">$${s.sma50>0?s.sma50.toFixed(2):'N/A'}</div></div>
+      <div class="text-center p-2 rounded-lg" style="background:var(--bg)"><div class="text-xs mb-1" style="color:var(--muted)">SMA50</div><div class="font-semibold text-sm" style="color:${s.price>s.sma50?'#10b981':'#ef4444'}">${s.sma50>0?sym+s.sma50.toFixed(2):'N/A'}</div></div>
     </div>
     <p class="text-xs leading-relaxed" style="color:var(--muted)">${blurb}</p>
     ${posBadge}${exitBanner}`;
@@ -708,6 +715,7 @@ function renderDetail(s, tab) {
   const positions = loadPositions();
   const pos     = positions[s.ticker];
   const meta    = (s.thesis || s.catalyst) ? s : null;
+  const sym     = currSym(s.currency);
 
   panel.style.display = 'block';
   panel.className = 'card p-6 slide-in';
@@ -741,23 +749,23 @@ function renderDetail(s, tab) {
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <div class="p-3 rounded-lg" style="background:var(--card)">
           <div class="text-xs mb-1" style="color:var(--muted)">Purchase Price</div>
-          <div class="font-bold text-lg">$${pm.entry.toFixed(2)}</div>
+          <div class="font-bold text-lg">${sym}${pm.entry.toFixed(2)}</div>
           <div class="text-xs mt-1" style="color:var(--muted)">${pos.entryDate} · ${dayHeld}d held</div>
         </div>
         <div class="p-3 rounded-lg" style="background:var(--card)">
           <div class="text-xs mb-1" style="color:var(--muted)">Unrealised P&amp;L</div>
           <div class="font-bold text-lg" style="color:${pc}">${ps}${pm.pnlPct.toFixed(2)}%</div>
-          ${pm.pnlAbs!==null?`<div class="text-xs mt-1" style="color:${pc}">${ps}$${Math.abs(pm.pnlAbs).toFixed(2)} · ${pos.shares} shares</div>`:''}
+          ${pm.pnlAbs!==null?`<div class="text-xs mt-1" style="color:${pc}">${ps}${sym}${Math.abs(pm.pnlAbs).toFixed(2)} · ${pos.shares} shares</div>`:''}
         </div>
         <div class="p-3 rounded-lg" style="background:var(--card)">
           <div class="text-xs mb-1" style="color:var(--muted)">Stop Loss (${stopLabel})</div>
-          <div class="font-bold text-lg" style="color:#ef4444">$${pm.stop.toFixed(2)}</div>
+          <div class="font-bold text-lg" style="color:#ef4444">${sym}${pm.stop.toFixed(2)}</div>
           <div class="text-xs mt-1" style="color:var(--muted)">${((pm.stop-s.price)/s.price*100).toFixed(1)}% from now</div>
         </div>
         <div class="p-3 rounded-lg" style="background:var(--card)">
           <div class="text-xs mb-1" style="color:var(--muted)">Next Target</div>
           <div class="font-bold text-lg" style="color:${pm.t1Hit?'#10b981':'var(--text)'}">
-            $${pm.t3Hit?'✓ All hit':pm.t2Hit?pm.t3.toFixed(2):pm.t1Hit?pm.t2.toFixed(2):pm.t1.toFixed(2)}
+            ${pm.t3Hit?'✓ All hit':sym+(pm.t2Hit?pm.t3.toFixed(2):pm.t1Hit?pm.t2.toFixed(2):pm.t1.toFixed(2))}
           </div>
           <div class="text-xs mt-1" style="color:var(--muted)">${pm.t3Hit?'+125% (all hit)':pm.t2Hit?'T3 +125% remaining':pm.t1Hit?'T2 +75% remaining':'T1 +35%'}</div>
         </div>
@@ -765,7 +773,7 @@ function renderDetail(s, tab) {
       <div class="grid grid-cols-3 gap-2 text-xs">
         ${[{label:'T1 +35%',val:pm.t1,hit:pm.t1Hit},{label:'T2 +75%',val:pm.t2,hit:pm.t2Hit},{label:'T3 +125%',val:pm.t3,hit:pm.t3Hit}].map(t=>`
           <div class="p-2 rounded-lg flex items-center justify-between" style="background:var(--card);${t.hit?'border:1px solid rgba(16,185,129,.4)':''}">
-            <span style="color:var(--muted)">${t.label} — $${t.val.toFixed(2)}</span>
+            <span style="color:var(--muted)">${t.label} — ${sym}${t.val.toFixed(2)}</span>
             <span style="color:${t.hit?'#10b981':'var(--muted)'}">${t.hit?'✓ HIT':'pending'}</span>
           </div>`).join('')}
       </div>
@@ -786,9 +794,9 @@ function renderDetail(s, tab) {
       </div>
       <div class="flex items-center gap-3">
         <div class="text-right">
-          <div class="text-3xl font-bold">$${s.price.toFixed(2)}</div>
+          <div class="text-3xl font-bold">${sym}${s.price.toFixed(2)}</div>
           <div class="text-lg" style="color:${s.change_pct>=0?'#10b981':'#ef4444'}">${s.change_pct>=0?'+':''}${s.change_pct}% today</div>
-          <div class="text-xs mt-1" style="color:var(--muted)">Mkt Cap: ${fmtCap(s.market_cap)}</div>
+          <div class="text-xs mt-1" style="color:var(--muted)">Mkt Cap: ${fmtCap(s.market_cap, sym)}</div>
         </div>
         <div class="flex flex-col gap-2 items-end">
           ${nordnetBtn(s, 'lg')}
@@ -823,14 +831,14 @@ function renderDetail(s, tab) {
           <div class="grid grid-cols-2 gap-2">
             <div class="p-3 rounded-lg" style="background:var(--card)"><div class="text-xs mb-1" style="color:var(--muted)">MACD</div><div class="font-bold" style="color:${s.macd>=0?'#10b981':'#ef4444'}">${s.macd>=0?'+':''}${s.macd.toFixed(4)}</div></div>
             <div class="p-3 rounded-lg" style="background:var(--card)"><div class="text-xs mb-1" style="color:var(--muted)">Histogram</div><div class="font-bold" style="color:${s.macd_hist>=0?'#10b981':'#ef4444'}">${s.macd_hist>=0?'+':''}${s.macd_hist.toFixed(4)}</div></div>
-            <div class="p-3 rounded-lg" style="background:var(--card)"><div class="text-xs mb-1" style="color:var(--muted)">SMA 20</div><div class="font-bold">$${s.sma20>0?s.sma20.toFixed(2):'N/A'}</div></div>
-            <div class="p-3 rounded-lg" style="background:var(--card)"><div class="text-xs mb-1" style="color:var(--muted)">SMA 50</div><div class="font-bold" style="color:${s.price>s.sma50?'#10b981':'#ef4444'}">$${s.sma50>0?s.sma50.toFixed(2):'N/A'}</div></div>
+            <div class="p-3 rounded-lg" style="background:var(--card)"><div class="text-xs mb-1" style="color:var(--muted)">SMA 20</div><div class="font-bold">${s.sma20>0?sym+s.sma20.toFixed(2):'N/A'}</div></div>
+            <div class="p-3 rounded-lg" style="background:var(--card)"><div class="text-xs mb-1" style="color:var(--muted)">SMA 50</div><div class="font-bold" style="color:${s.price>s.sma50?'#10b981':'#ef4444'}">${s.sma50>0?sym+s.sma50.toFixed(2):'N/A'}</div></div>
           </div>
           <div><div class="text-xs mb-2" style="color:var(--muted)">BOLLINGER BANDS</div>
             <div class="space-y-1 text-sm">
-              <div class="flex justify-between"><span style="color:var(--muted)">Upper</span><span style="color:#ef4444">$${s.bb_upper.toFixed(2)}</span></div>
-              <div class="flex justify-between"><span style="color:var(--muted)">Mid</span><span>$${s.bb_mid.toFixed(2)}</span></div>
-              <div class="flex justify-between"><span style="color:var(--muted)">Lower</span><span style="color:#10b981">$${s.bb_lower.toFixed(2)}</span></div>
+              <div class="flex justify-between"><span style="color:var(--muted)">Upper</span><span style="color:#ef4444">${sym}${s.bb_upper.toFixed(2)}</span></div>
+              <div class="flex justify-between"><span style="color:var(--muted)">Mid</span><span>${sym}${s.bb_mid.toFixed(2)}</span></div>
+              <div class="flex justify-between"><span style="color:var(--muted)">Lower</span><span style="color:#10b981">${sym}${s.bb_lower.toFixed(2)}</span></div>
             </div>
           </div>
         </div>
@@ -895,8 +903,8 @@ function renderDetailChart(s, color, pm) {
   detailChartInstance = new Chart(ctx,{type:'line',data:{labels,datasets},options:{
     responsive:true,maintainAspectRatio:false,
     interaction:{intersect:false,mode:'index'},
-    plugins:{legend:{display:false},tooltip:{backgroundColor:'#1f2937',borderColor:'#374151',borderWidth:1,titleColor:'#9ca3af',bodyColor:'#e5e7eb',callbacks:{label:c=>c.parsed.y===null?null:` ${c.dataset.label}: $${c.parsed.y.toFixed(2)}`}}},
-    scales:{x:{grid:{color:'rgba(31,41,55,.8)'},ticks:{color:'#6b7280',maxTicksLimit:8,font:{size:11}}},y:{grid:{color:'rgba(31,41,55,.8)'},ticks:{color:'#6b7280',font:{size:11},callback:v=>'$'+v.toFixed(2)}}},
+    plugins:{legend:{display:false},tooltip:{backgroundColor:'#1f2937',borderColor:'#374151',borderWidth:1,titleColor:'#9ca3af',bodyColor:'#e5e7eb',callbacks:{label:c=>c.parsed.y===null?null:` ${c.dataset.label}: ${currSym(s.currency)}${c.parsed.y.toFixed(2)}`}}},
+    scales:{x:{grid:{color:'rgba(31,41,55,.8)'},ticks:{color:'#6b7280',maxTicksLimit:8,font:{size:11}}},y:{grid:{color:'rgba(31,41,55,.8)'},ticks:{color:'#6b7280',font:{size:11},callback:v=>currSym(s.currency)+v.toFixed(2)}}},
   }});
 }
 
@@ -921,11 +929,12 @@ function getAdvice(s) {
   const sig = s.signal.overall;
   const buyRSI = s.rsi < 40 ? `RSI is at ${s.rsi} (oversold) — a technical buy setup. ` : s.rsi < 50 ? `RSI at ${s.rsi} — below midpoint, modest buying pressure. ` : '';
   const macdBuy = s.macd_hist > 0 ? 'MACD histogram is positive — bullish momentum. ' : '';
-  const bbBuy = s.price < s.bb_lower ? `Price is below the lower Bollinger Band ($${s.bb_lower.toFixed(2)}) — mean reversion setup. ` : '';
-  const smaStatus = s.sma50 > 0 ? (s.price > s.sma50 ? `Price is above the 50-day MA ($${s.sma50.toFixed(2)}) — uptrend intact. ` : `Price is below the 50-day MA ($${s.sma50.toFixed(2)}) — wait for reclaim before adding. `) : '';
+  const _s = currSym(s.currency);
+  const bbBuy = s.price < s.bb_lower ? `Price is below the lower Bollinger Band (${_s}${s.bb_lower.toFixed(2)}) — mean reversion setup. ` : '';
+  const smaStatus = s.sma50 > 0 ? (s.price > s.sma50 ? `Price is above the 50-day MA (${_s}${s.sma50.toFixed(2)}) — uptrend intact. ` : `Price is below the 50-day MA (${_s}${s.sma50.toFixed(2)}) — wait for reclaim before adding. `) : '';
   return {
     buy: (buyRSI||macdBuy||bbBuy||'Wait for RSI below 45 and a MACD bullish crossover before entering. ') + smaStatus,
-    sell:`RSI above 70 and price above the upper Bollinger Band ($${s.bb_upper.toFixed(2)}). Honour your stop loss — exit if price falls to your set stop. Sell if the MACD histogram turns negative while you are already in profit.`,
+    sell:`RSI above 70 and price above the upper Bollinger Band (${_s}${s.bb_upper.toFixed(2)}). Honour your stop loss — exit if price falls to your set stop. Sell if the MACD histogram turns negative while you are already in profit.`,
   };
 }
 
@@ -956,7 +965,7 @@ function updateTickerTape() {
   if (!all.length) return;
   const items = all.map(s=>{
     const c=s.change_pct>=0?'#10b981':'#ef4444';
-    return `<span style="margin:0 28px;font-size:13px;font-weight:600"><span style="color:#e5e7eb">${s.ticker}</span><span style="color:#9ca3af;margin:0 6px">$${s.price.toFixed(2)}</span><span style="color:${c}">${s.change_pct>=0?'▲':'▼'} ${Math.abs(s.change_pct)}%</span></span>`;
+    return `<span style="margin:0 28px;font-size:13px;font-weight:600"><span style="color:#e5e7eb">${s.ticker}</span><span style="color:#9ca3af;margin:0 6px">${currSym(s.currency)}${s.price.toFixed(2)}</span><span style="color:${c}">${s.change_pct>=0?'▲':'▼'} ${Math.abs(s.change_pct)}%</span></span>`;
   });
   document.getElementById('ticker-tape-inner').innerHTML=items.join('')+items.join('');
   document.getElementById('ticker-tape-wrap').style.display='block';
