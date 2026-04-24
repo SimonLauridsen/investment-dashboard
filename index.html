@@ -93,6 +93,9 @@
   </div>
 </div>
 
+<!-- ── Replacement notifications ───────────────────────────────────────────── -->
+<div id="replacements-bar" style="display:none;background:rgba(245,158,11,.08);border-bottom:1px solid rgba(245,158,11,.2);padding:10px 24px;gap:8px;flex-direction:column"></div>
+
 <!-- ── Ticker tape ─────────────────────────────────────────────────────────── -->
 <div class="ticker-tape" id="ticker-tape-wrap" style="display:none">
   <div class="ticker-tape-inner" id="ticker-tape-inner"></div>
@@ -213,26 +216,15 @@
 <script>
 // ── Constants & state ─────────────────────────────────────────────────────────
 const API = '';
-const WATCHLIST_TICKERS = ['NNE','LUNR','CRML','RGTI','ASML.AS','NEL.OL'];
-const THEME_COLORS = {NNE:'#f59e0b',LUNR:'#a78bfa',CRML:'#10b981',RGTI:'#3b82f6','ASML.AS':'#e11d48','NEL.OL':'#22c55e'};
+// Colors assigned deterministically by ticker string hash — stable across refreshes
+function tickerColorFromHash(ticker) {
+  const PALETTE = ['#f59e0b','#a78bfa','#10b981','#3b82f6','#e11d48','#22c55e','#06b6d4','#8b5cf6','#ec4899','#14b8a6'];
+  let h = 0;
+  for (const c of ticker) h = Math.imul(31, h) + c.charCodeAt(0) | 0;
+  return PALETTE[Math.abs(h) % PALETTE.length];
+}
 
-const CURATED_META = {
-  NNE:{ theme:'Portable Micro-Reactors', catalyst:'White House Space Nuclear Mandate issued Apr 14 2026 — orbital deployment targeted 2028. DOE GAIN voucher for KRONOS MMR. $577M cash after $400M raise. Reuters SMR 2026 platinum sponsor.', thesis:'Most non-obvious nuclear play: portable micro-reactors for military forward bases, remote industry, and space. White House executive mandate just issued — procurement timelines could accelerate before the market prices it in.', risk:'Pre-revenue. KRONOS construction permit not until mid-2027. Regulatory path long.', macro:'AI power demand + White House space nuclear mandate + off-grid energy needs for defence.' },
-  LUNR:{ theme:'Lunar Economy / NASA', catalyst:'$4.6B NASA Lunar Terrain Vehicle contract decision pending. $180M IM-5 lander contract won. 5-satellite lunar GPS network launching mid-2026. Backlog $943M. Revenue guidance $900M–$1B for 2026.', thesis:'Only commercial company with a proven lunar lander that has already landed on the Moon. NASA building a permanent lunar economy and Intuitive Machines is the prime contractor. $4.6B LTV award = 5× revenue event.', risk:'Government revenue is lumpy. CFO sold 24K shares Apr 2026. Ongoing operating losses.', macro:'Artemis programme accelerating. US-China lunar competition driving NASA budget. Commercial space economy inflecting.' },
-  CRML:{ theme:'Greenland Rare Earths', catalyst:"Trump's $12B Project Vault critical minerals reserve. Jan 2027 Pentagon ban on Chinese-sourced magnets. US-China trade war accelerating domestic sourcing.", thesis:'Controls Tanbreez — one of the largest non-Chinese rare earth deposits globally. Jumped 35% in single session on US-Greenland talks. A geopolitical asset, not just a mining stock.', risk:'Early stage. Greenland political dynamics. Long development timeline.', macro:'China controls 90% of rare earth magnet manufacturing. US defense mandate by 2027.' },
-  RGTI:{ theme:'Quantum Computing', catalyst:'108-qubit Cepheus-1-108Q just launched (+34% on debut). $8.4M C-DAC order for H2 2026. $5.8M AFRL quantum networking contract. 150+ qubit system targeting 99.7% fidelity by end 2026. 336-qubit Lyra processor in roadmap.', thesis:'Only pure-play quantum hardware company shipping real systems to real customers. $589M cash = 3–4 years runway. 336-qubit Lyra is the quantum advantage trigger the sector is waiting for.', risk:'FY2025 revenue down 56% YoY. Pre-scale. IBM and Google are formidable competitors.', macro:'White House National Quantum Initiative. US-China quantum supremacy race. DoD quantum networking contracts expanding.' },
-  'ASML.AS':{ theme:'AI Semiconductor Infrastructure', catalyst:"Q1 2026 orders €7.7B — 2× analyst consensus. US CHIPS Act + EU Chips Act combined €100B+ capex requires ASML EUV equipment. Trade war urgency driving TSMC/Samsung/Intel to front-load orders. Only supplier of EUV lithography machines globally.", thesis:"Most non-obvious AI play in Europe: ASML doesn't make chips — it makes the only machines that can make advanced AI chips. 30 years of R&D created a monopoly that cannot be replicated. Pulled back ~20% from ATH on tariff fears, but chips are largely exempt from tariff frameworks.", risk:'China export ban reduces addressable market ~15%. High valuation. TSMC capex slowdown would reduce order intake.', macro:'AI infrastructure buildout requires 2–3× advanced chip fabrication capacity. US CHIPS Act + EU Chips Act funding. US-China semiconductor decoupling entrenches ASML Western monopoly.' },
-  'NEL.OL':{ theme:'European Hydrogen Infrastructure', catalyst:"EU 10Mt renewable hydrogen target by 2030. German H2Global programme €2B. Norwegian government hydrogen offtake guarantee. US DOE loan programs for Nel's US electrolyzer manufacturing expansion. Q1 2026 results due May 2026.", thesis:"Norway's national hydrogen champion and Europe's largest electrolyzer manufacturer. The EU made hydrogen its strategic replacement for Russian gas. Trading at 2.25 NOK vs ATH of 27 NOK — pricing in worst case while EU mandates improve fundamentals. Lowest-cost electrolyzer technology at scale.", risk:'Capital-intensive. Hydrogen demand ramp slower than modelled. Chinese electrolyzer competitors lowering prices.', macro:'EU energy independence from Russia. European Green Deal hydrogen mandate. Industrial decarbonization (steel, shipping, aviation). Norwegian offshore wind-to-hydrogen export strategy.' },
-};
-
-const SEARCH_SCHEDULE = {
-  RGTI:     { event:'150-Qubit System Delivery', date:'2026-12-31', note:'Technical milestone — replace if delivery slips past Q4' },
-  NNE:      { event:'DOE KRONOS Permit Filing',  date:'2026-07-01', note:'Construction permit submission — thesis checkpoint' },
-  LUNR:     { event:'NASA LTV Contract Award',   date:'2026-06-15', note:'$4.6B award decision — binary catalyst; replace if lost' },
-  CRML:     { event:'Project Vault Tranche',     date:'2026-06-01', note:'First fund disbursement; re-score if delayed' },
-  'ASML.AS':{ event:'Q2 2026 Order Intake',      date:'2026-07-16', note:'Order momentum check — thesis breaks if <€5B' },
-  'NEL.OL': { event:'Q1 2026 Earnings',          date:'2026-05-15', note:'Revenue + electrolyzer backlog update — core thesis signal' },
-};
+let watchlistOrder = []; // ordered tickers from last /api/stocks response
 
 let watchlistData  = {};   // ticker → api response
 let customData     = {};   // ticker → api response
@@ -263,7 +255,7 @@ function signalStyle(o) {
 const fmtCap = n => !n?'N/A':n>=1e9?'$'+(n/1e9).toFixed(2)+'B':n>=1e6?'$'+(n/1e6).toFixed(1)+'M':'$'+n;
 const rsiColor = r => r<=35?'#00ff88':r<=50?'#10b981':r<=65?'#f59e0b':'#ef4444';
 const daysUntil = d => { const a=new Date(d),b=new Date(); a.setHours(0,0,0,0); b.setHours(0,0,0,0); return Math.round((a-b)/86400000); };
-const tickerColor = t => THEME_COLORS[t] || '#3b82f6';
+const tickerColor = t => tickerColorFromHash(t);
 
 function nordnetBtn(s, size = 'sm') {
   if (!s.nordnet_url) return '';
@@ -534,9 +526,8 @@ function buildCard(s, tab, isCustom) {
   card.id = `card-${tab}-${s.ticker}`;
   card.onclick = () => selectStock(s.ticker, tab);
 
-  const meta = CURATED_META[s.ticker];
-  const themeBadge = meta?.theme||s.theme||s.sector||'';
-  const blurb = meta?.catalyst ? meta.catalyst.substring(0,110)+'…' : (s.name||'');
+  const themeBadge = s.theme || s.sector || '';
+  const blurb = s.catalyst ? s.catalyst.substring(0,110)+'…' : (s.name||'');
 
   card.innerHTML = `
     <div class="flex items-start justify-between mb-3">
@@ -577,7 +568,7 @@ function buildCard(s, tab, isCustom) {
 function renderWatchlistGrid() {
   const grid = document.getElementById('watchlist-grid');
   grid.innerHTML='';
-  const stocks = WATCHLIST_TICKERS.map(t=>watchlistData[t]).filter(Boolean);
+  const stocks = watchlistOrder.map(t=>watchlistData[t]).filter(Boolean);
   if (!stocks.length) { grid.innerHTML='<div class="card p-6 text-center" style="grid-column:1/-1;color:var(--muted)">Loading...</div>'; return; }
   stocks.forEach(s => {
     const card = buildCard(s, 'watchlist', false);
@@ -625,7 +616,7 @@ function renderDetail(s, tab) {
   const ss      = signalStyle(sig.overall);
   const positions = loadPositions();
   const pos     = positions[s.ticker];
-  const meta    = CURATED_META[s.ticker];
+  const meta    = (s.thesis || s.catalyst) ? s : null;
 
   panel.style.display = 'block';
   panel.className = 'card p-6 slide-in';
@@ -880,22 +871,45 @@ function updateTickerTape() {
   document.getElementById('ticker-tape-wrap').style.display='block';
 }
 
-// ── Search schedule ───────────────────────────────────────────────────────────
+// ── Search schedule (driven by API catalyst_date fields) ──────────────────────
 function renderSearchSchedule() {
   const el=document.getElementById('search-schedule-items'); if(!el)return;
   el.innerHTML='';
-  Object.entries(SEARCH_SCHEDULE).forEach(([ticker,info])=>{
-    const days=daysUntil(info.date);
+  const entries = Object.values(watchlistData).filter(s=>s.catalyst_date);
+  if (!entries.length) { el.innerHTML='<span style="color:var(--muted);font-size:12px">Loading catalyst schedule…</span>'; return; }
+  entries.forEach(s=>{
+    const days=daysUntil(s.catalyst_date);
     const urgent=days<=7, overdue=days<0;
-    const color=overdue?'#ef4444':urgent?'#f59e0b':THEME_COLORS[ticker]||'#6b7280';
+    const color=overdue?'#ef4444':urgent?'#f59e0b':tickerColor(s.ticker);
     const label=overdue?`${Math.abs(days)}d overdue`:days===0?'TODAY':`${days}d`;
-    el.innerHTML+=`<div class="flex items-center gap-2 px-3 py-2 rounded-lg" style="background:var(--bg);border:1px solid ${color}33">
-      <span class="font-bold text-sm" style="color:${color}">${ticker}</span>
-      <span class="text-xs" style="color:var(--muted)">${info.event}</span>
+    el.innerHTML+=`<div class="flex items-center gap-2 px-3 py-2 rounded-lg" style="background:var(--bg);border:1px solid ${color}33" title="${s.catalyst_note||''}">
+      <span class="font-bold text-sm" style="color:${color}">${s.ticker}</span>
+      <span class="text-xs" style="color:var(--muted)">${s.catalyst_event}</span>
       <span class="badge" style="background:${color}22;color:${color};border:1px solid ${color}44">${label}</span>
-      ${overdue||urgent?`<span class="text-xs font-semibold" style="color:${color}">→ Search now</span>`:''}
+      ${overdue||urgent?`<span class="text-xs font-semibold" style="color:${color}">→ Check now</span>`:''}
     </div>`;
   });
+}
+
+// ── Replacement notifications ─────────────────────────────────────────────────
+async function renderReplacements() {
+  try {
+    const res  = await fetch(`${API}/api/replacements`);
+    const log  = await res.json();
+    const el   = document.getElementById('replacements-bar');
+    if (!el || !log.length) return;
+    const recent = log.slice(-3).reverse();
+    el.style.display = 'block';
+    el.innerHTML = recent.map(r=>`
+      <div class="flex items-center gap-2 flex-wrap" style="font-size:12px">
+        <span style="color:#f59e0b;font-weight:700">⚡ Auto-replaced</span>
+        <span style="color:#ef4444;font-weight:600">${r.removed}</span>
+        <span style="color:var(--muted)">→</span>
+        <span style="color:#10b981;font-weight:600">${r.added}</span>
+        <span style="color:var(--muted)">${r.reason}</span>
+        <span style="color:var(--muted);opacity:.6">${r.date}</span>
+      </div>`).join('<hr style="border-color:var(--border);margin:4px 0">');
+  } catch {}
 }
 
 // ── Peak tracking (trailing stop) ─────────────────────────────────────────────
@@ -914,7 +928,9 @@ async function refreshAll() {
     // Watchlist
     const res = await fetch(`${API}/api/stocks`);
     const stocks = await res.json();
+    watchlistOrder = stocks.filter(s=>!s.error).map(s=>s.ticker);
     stocks.forEach(s=>{ if(!s.error) watchlistData[s.ticker]=s; });
+    await renderReplacements();
 
     // Custom tickers (refresh existing data)
     const customList = loadCustomList();

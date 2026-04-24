@@ -5,16 +5,15 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
-import json, os, hmac, hashlib, base64
+import json, os, hmac, hashlib, base64, threading
 import urllib.request
 import urllib.parse
 
-# ── Auth config ───────────────────────────────────────────────────────────────
-SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
+# ── Auth ───────────────────────────────────────────────────────────────────────
+SECRET_KEY         = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
-CUSTOM_FILE = Path("custom_tickers.json")
 
 def _make_token() -> str:
     msg = b"authenticated"
@@ -63,13 +62,11 @@ LOGIN_HTML = """<!DOCTYPE html>
 </body>
 </html>"""
 
-# ── Auth middleware ────────────────────────────────────────────────────────────
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.url.path in ("/login", "/logout"):
             return await call_next(request)
-        token = request.cookies.get("sa_session", "")
-        if not _verify_token(token):
+        if not _verify_token(request.cookies.get("sa_session", "")):
             return RedirectResponse("/login", status_code=302)
         return await call_next(request)
 
@@ -77,7 +74,6 @@ app = FastAPI()
 app.add_middleware(AuthMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# ── Auth endpoints ────────────────────────────────────────────────────────────
 @app.get("/login", response_class=HTMLResponse)
 def login_page():
     return LOGIN_HTML.format(error="")
@@ -100,7 +96,9 @@ def logout():
     resp.delete_cookie("sa_session")
     return resp
 
-# ── Custom tickers persistence ────────────────────────────────────────────────
+# ── Custom tickers ────────────────────────────────────────────────────────────
+CUSTOM_FILE = Path("custom_tickers.json")
+
 def _read_custom() -> list:
     try:
         return json.loads(CUSTOM_FILE.read_text()) if CUSTOM_FILE.exists() else []
@@ -128,15 +126,21 @@ def remove_custom(ticker: str):
     _write_custom(tickers)
     return tickers
 
-# ── Stock data ─────────────────────────────────────────────────────────────────
+# ── Stock universe ─────────────────────────────────────────────────────────────
+# Active watchlist (6 slots) — persisted to watchlist.json
+# Candidate pool — bench picks promoted when a slot opens
+
 STOCKS = {
     "NNE": {
         "name": "NANO Nuclear Energy Inc.",
         "theme": "Portable Micro-Reactors",
-        "catalyst": "White House Space Nuclear Mandate (Apr 14 2026) targets reactor deployment beyond Earth by 2028. DOE GAIN voucher awarded for KRONOS MMR microreactor. $577M cash after $400M private placement. Reuters SMR 2026 conference platinum sponsor.",
-        "thesis": "The most non-obvious nuclear play: portable micro-reactors for military forward bases, remote industry, and space. White House executive mandate just issued — procurement timelines could accelerate before the market prices it in. $577M cash = years of runway.",
+        "catalyst": "White House Space Nuclear Mandate (Apr 14 2026) targets reactor deployment beyond Earth by 2028. DOE GAIN voucher awarded for KRONOS MMR microreactor. $577M cash after $400M private placement.",
+        "thesis": "The most non-obvious nuclear play: portable micro-reactors for military forward bases, remote industry, and space. White House executive mandate just issued — procurement timelines could accelerate before the market prices it in.",
         "risk": "Pre-revenue. KRONOS construction permit not until mid-2027. Regulatory path long.",
-        "macro": "AI power demand + White House space nuclear mandate + off-grid energy needs for defence. Structural multi-decade tailwind."
+        "macro": "AI power demand + White House space nuclear mandate + off-grid energy needs for defence.",
+        "catalyst_date": "2026-07-01",
+        "catalyst_event": "DOE KRONOS Permit Filing",
+        "catalyst_note": "Construction permit submission — thesis checkpoint",
     },
     "LUNR": {
         "name": "Intuitive Machines",
@@ -144,7 +148,10 @@ STOCKS = {
         "catalyst": "$4.6B NASA Lunar Terrain Vehicle contract decision pending. $180M IM-5 lander contract just won. 5-satellite lunar GPS network launching mid-2026. Backlog $943M. Revenue guidance $900M–$1B for 2026.",
         "thesis": "The only commercial company with a proven lunar lander that has already landed on the Moon. NASA is building a permanent lunar economy and Intuitive Machines is the prime contractor. $4.6B LTV award would be a 5× revenue event.",
         "risk": "Government revenue is lumpy. CFO sold 24K shares in Apr 2026. Ongoing operating losses.",
-        "macro": "Artemis programme accelerating. US-China lunar competition driving NASA budget prioritisation. Commercial space economy inflecting."
+        "macro": "Artemis programme accelerating. US-China lunar competition driving NASA budget. Commercial space economy inflecting.",
+        "catalyst_date": "2026-06-15",
+        "catalyst_event": "NASA LTV Contract Award",
+        "catalyst_note": "$4.6B award decision — binary catalyst; replace if lost",
     },
     "CRML": {
         "name": "Critical Metals Corp",
@@ -152,34 +159,168 @@ STOCKS = {
         "catalyst": "Trump's $12B Project Vault critical minerals reserve. Jan 2027 Pentagon ban on Chinese-sourced rare earth magnets. US-China trade war accelerating domestic sourcing.",
         "thesis": "Controls Tanbreez — one of the largest non-Chinese rare earth deposits globally, in Greenland. Jumped 35% in single session on US-Greenland talks. This is a geopolitical asset, not just a mining stock.",
         "risk": "Early stage. Greenland political dynamics. Long development timeline.",
-        "macro": "China controls 90% of rare earth magnet manufacturing. US defense mandate by 2027."
+        "macro": "China controls 90% of rare earth magnet manufacturing. US defense mandate by 2027.",
+        "catalyst_date": "2026-06-01",
+        "catalyst_event": "Project Vault Tranche",
+        "catalyst_note": "First fund disbursement; re-score if delayed",
     },
     "RGTI": {
         "name": "Rigetti Computing",
         "theme": "Quantum Computing",
-        "catalyst": "108-qubit Cepheus-1-108Q system just launched (+34% on debut). $8.4M C-DAC order for H2 2026 delivery. $5.8M AFRL contract for quantum networking. 150+ qubit system targeting 99.7% fidelity by end 2026. 336-qubit Lyra processor in roadmap for quantum advantage demonstration.",
-        "thesis": "Only pure-play quantum hardware company shipping real systems to real customers. White House quantum tech mandate accelerating defence procurement. $589M cash = 3-4 years of runway regardless of revenue trajectory. 336-qubit Lyra is the quantum advantage trigger the sector has been waiting for.",
-        "risk": "FY2025 revenue down 56% YoY. Still pre-scale. IBM and Google are formidable competitors.",
-        "macro": "White House National Quantum Initiative. US-China quantum supremacy race. DoD quantum networking contracts expanding."
+        "catalyst": "108-qubit Cepheus-1-108Q system just launched (+34% on debut). $8.4M C-DAC order for H2 2026 delivery. $5.8M AFRL contract for quantum networking. 150+ qubit system targeting 99.7% fidelity by end 2026.",
+        "thesis": "Only pure-play quantum hardware company shipping real systems to real customers. $589M cash = 3–4 years runway. 336-qubit Lyra is the quantum advantage trigger the sector is waiting for.",
+        "risk": "FY2025 revenue down 56% YoY. Pre-scale. IBM and Google are formidable competitors.",
+        "macro": "White House National Quantum Initiative. US-China quantum supremacy race. DoD quantum networking contracts expanding.",
+        "catalyst_date": "2026-12-31",
+        "catalyst_event": "150-Qubit System Delivery",
+        "catalyst_note": "Technical milestone — replace if delivery slips past Q4",
     },
     "ASML.AS": {
         "name": "ASML Holding N.V.",
         "theme": "AI Semiconductor Infrastructure",
-        "catalyst": "Q1 2026 orders €7.7B — 2× analyst consensus. US CHIPS Act + European Chips Act combined €100B+ capex requires ASML EUV equipment. Trade war urgency driving TSMC/Samsung/Intel to front-load orders ahead of further US-China export controls. Only supplier of EUV lithography machines globally.",
-        "thesis": "The most non-obvious AI play in Europe: ASML doesn't make chips, it makes the only machines in the world capable of making advanced AI chips. 30 years of R&D created a monopoly that cannot be replicated. Without ASML, there are no AI chips. Pulled back ~20% from ATH on tariff uncertainty — but chips are largely exempt from tariff frameworks.",
-        "risk": "China export ban reduces addressable market ~15%. High valuation. TSMC capex slowdown would reduce order intake.",
-        "macro": "AI infrastructure buildout requires 2–3× advanced chip fabrication capacity. US CHIPS Act + EU Chips Act funding. US-China semiconductor decoupling entrenches ASML's Western monopoly."
+        "catalyst": "Q1 2026 orders €7.7B — 2× analyst consensus. US CHIPS Act + EU Chips Act combined €100B+ capex requires ASML EUV equipment. Trade war urgency driving TSMC/Samsung/Intel to front-load orders.",
+        "thesis": "Most non-obvious AI play in Europe: ASML doesn't make chips — it makes the only machines that can make advanced AI chips. 30 years of R&D created a monopoly that cannot be replicated. Pulled back ~20% from ATH on tariff fears that don't affect their core business.",
+        "risk": "China export ban reduces addressable market ~15%. High valuation. TSMC capex slowdown.",
+        "macro": "AI infrastructure buildout requires 2–3× advanced chip fabrication capacity. US-China semiconductor decoupling entrenches ASML's Western monopoly.",
+        "catalyst_date": "2026-07-16",
+        "catalyst_event": "Q2 2026 Order Intake",
+        "catalyst_note": "Order momentum check — thesis breaks if <€5B",
     },
     "NEL.OL": {
         "name": "Nel ASA",
         "theme": "European Hydrogen Infrastructure",
-        "catalyst": "EU 10Mt renewable hydrogen target by 2030. German H2Global programme €2B allocation. Norwegian government hydrogen offtake guarantee. US DOE loan programs for Nel's US electrolyzer manufacturing expansion. Q1 2026 results due May 2026.",
-        "thesis": "Norway's national hydrogen champion and Europe's largest electrolyzer manufacturer. The EU made hydrogen its strategic replacement for Russian gas — Nel makes the machines that produce it. Trading at 2.25 NOK vs ATH of 27 NOK, pricing in a worst-case scenario while EU mandates structurally improve fundamentals. Lowest-cost electrolyzer technology at scale.",
+        "catalyst": "EU 10Mt renewable hydrogen target by 2030. German H2Global programme €2B. Norwegian government hydrogen offtake guarantee. US DOE loan programs for Nel's US electrolyzer manufacturing. Q1 2026 results due May 2026.",
+        "thesis": "Norway's national hydrogen champion and Europe's largest electrolyzer manufacturer. The EU made hydrogen its strategic replacement for Russian gas. Trading at ~2 NOK vs ATH of 27 NOK — pricing worst case while EU mandates improve fundamentals.",
         "risk": "Capital-intensive. Hydrogen demand ramp slower than modelled. Chinese electrolyzer competitors lowering prices.",
-        "macro": "EU energy independence from Russia. European Green Deal hydrogen mandate. Industrial decarbonization (steel, shipping, aviation). Norwegian offshore wind-to-hydrogen export strategy."
-    }
+        "macro": "EU energy independence from Russia. European Green Deal hydrogen mandate. Industrial decarbonization (steel, shipping, aviation).",
+        "catalyst_date": "2026-05-15",
+        "catalyst_event": "Q1 2026 Earnings",
+        "catalyst_note": "Revenue + electrolyzer backlog update — core thesis signal",
+    },
 }
 
+CANDIDATE_POOL = {
+    "ALFA.ST": {
+        "name": "Alfa Laval AB",
+        "theme": "AI Data Center Thermal Management",
+        "catalyst": "Hyperscaler data center buildout in Europe 2026–2027 driving liquid-cooling orders. Alfa Laval won major contracts for AI rack cooling with Microsoft and Amazon. Swedish defence budget up 40% — naval vessel cooling systems second catalyst.",
+        "thesis": "The most non-obvious AI infrastructure play: every AI GPU rack generates massive heat and liquid cooling is the only scalable solution. Alfa Laval dominates European heat-exchanger supply with a 130-year head start. The market prices it as a boring industrial — not as the company that keeps AI running.",
+        "risk": "Cyclical industrial. Data centre orders can be lumpy. Competition from German peers.",
+        "macro": "AI data centre buildout requires liquid cooling at scale. European rearmament (naval thermal systems). Energy transition heat-pump demand.",
+        "catalyst_date": "2026-07-18",
+        "catalyst_event": "Q2 2026 Earnings",
+        "catalyst_note": "Data centre order intake — key re-rating signal",
+    },
+    "COLO-B.CO": {
+        "name": "Coloplast B A/S",
+        "theme": "Healthcare Devices / Demographic Megatrend",
+        "catalyst": "China market re-entry clearance expected 2026. Wound care + urology expansion into ageing markets. Strong USD tailwind on DKK reporting. RSI oversold at 37 — near-term mean reversion setup.",
+        "thesis": "World's largest maker of ostomy and continence care products — a near-monopoly in a market that only grows as populations age. Oversold to RSI 37 despite fully intact fundamentals. Defensive compounder getting the same drawdown as cyclicals for no reason. STRONG BUY signal.",
+        "risk": "Currency headwinds. China regulatory uncertainty could delay re-entry.",
+        "macro": "Global ageing population (65+ doubles by 2050). Healthcare spending structurally rising. Emerging market middle class expansion.",
+        "catalyst_date": "2026-08-20",
+        "catalyst_event": "Q2 2026 Earnings + China Update",
+        "catalyst_note": "China re-entry confirmation or delay — binary for thesis",
+    },
+    "SAND.ST": {
+        "name": "Sandvik AB",
+        "theme": "Critical Minerals Extraction",
+        "catalyst": "Mining capex surging globally for copper, lithium and cobalt. Sandvik Q1 2026 orders up on strong demand. Nordic defence spending (Varel drilling systems for military engineering).",
+        "thesis": "Sandvik makes the drill bits, mining tools and rock-processing equipment for extracting the critical minerals the energy transition requires. Every mine expanding copper or lithium production buys Sandvik. The picks-and-shovels play on critical minerals with far lower geopolitical risk than the miners themselves.",
+        "risk": "Cyclical exposure to mining capex. Strong SEK hurts exports.",
+        "macro": "Energy transition requires 4–6× more copper and lithium mining. EV buildout. NATO Nordic defence spending surge.",
+        "catalyst_date": "2026-07-18",
+        "catalyst_event": "Q2 2026 Earnings",
+        "catalyst_note": "Mining order book — confirms or breaks extraction thesis",
+    },
+    "LDOS": {
+        "name": "Leidos Holdings, Inc.",
+        "theme": "US Defence IT & AI Modernisation",
+        "catalyst": "DoD AI contract awards accelerating in 2026. Pentagon $1.8T budget. Leidos is the largest US defence IT integrator. RSI at 32 — deeply oversold on broader market selloff, not company-specific news.",
+        "thesis": "The picks-and-shovels play on US military AI modernisation. Every weapons system being upgraded with AI needs Leidos's integration work. RSI at 32 means it's priced for a worst-case scenario while the DoD budget is at record highs. Largest defence IT firm = lowest execution risk of any defence play.",
+        "risk": "Government contract concentration. Budget continuing-resolution risk. Tariff-driven DoD reprioritisation.",
+        "macro": "US military AI modernisation. Cybersecurity buildout. $1.8T defence budget.",
+        "catalyst_date": "2026-07-24",
+        "catalyst_event": "Q2 FY2026 Earnings",
+        "catalyst_note": "Contract award pipeline — confirms defence IT spending is intact",
+    },
+    "DSV.CO": {
+        "name": "DSV A/S",
+        "theme": "Global Trade Reshoring",
+        "catalyst": "DB Schenker integration creating world's largest freight forwarder — full synergies mid-2026. US-China trade war supply chain reshuffling generating massive freight-forwarding demand. H1 2026 revenue guidance upgraded.",
+        "thesis": "DSV just acquired DB Schenker to become the world's largest freight forwarder. Trade war chaos is a windfall for freight companies — every supply chain being rerouted generates fees. The bigger and more global the network, the more indispensable DSV becomes. Market treats it as a cyclical; it is actually a network business.",
+        "risk": "Integration execution risk. Freight rate volatility. Economic slowdown reducing trade volumes.",
+        "macro": "US-China trade war reshuffling global supply chains. Near-shoring and friend-shoring driving new freight patterns.",
+        "catalyst_date": "2026-08-10",
+        "catalyst_event": "H1 2026 Results",
+        "catalyst_note": "DB Schenker integration synergies — confirms or breaks the deal thesis",
+    },
+    "ORSTED.CO": {
+        "name": "Orsted A/S",
+        "theme": "European Energy Independence",
+        "catalyst": "EU energy independence mandate accelerating offshore wind procurement. UK Contracts for Difference Round 7 results Q3 2026. Baltic Sea wind farm approvals. EU 2030 offshore wind target requires 10× current capacity.",
+        "thesis": "The world's largest offshore wind developer. Fell 70%+ from ATH on US project write-downs — but the European business is intact and growing. EU energy crisis from Russia has made offshore wind a national security priority, not just an environmental one. Rebuilding from a washed-out base.",
+        "risk": "US project write-downs may continue. High interest-rate sensitivity (capital-intensive). Permitting delays.",
+        "macro": "EU energy independence from Russia. Net Zero 2050 mandates. North Sea offshore wind buildout. NATO energy security.",
+        "catalyst_date": "2026-09-15",
+        "catalyst_event": "UK CfD Round 7 Results",
+        "catalyst_note": "Contract award confirms European pipeline — key re-rating",
+    },
+    "EXPN.L": {
+        "name": "Experian plc",
+        "theme": "Data Analytics / Credit Infrastructure",
+        "catalyst": "FY2026 results May 2026. Consumer credit demand rebounding as rate cycle turns. B2B data services expansion into emerging markets. AI-powered fraud detection product launch Q2 2026.",
+        "thesis": "Experian is one of three companies globally that control consumer credit data — a structural monopoly. As rates fall and credit demand recovers, Experian's volumes re-accelerate. The AI fraud detection pivot is a new high-margin revenue stream the market has not priced in.",
+        "risk": "Regulatory risk on credit data use in EU/UK. Economic slowdown reducing credit applications.",
+        "macro": "Rate cycle turning — credit demand recovering. AI-powered financial services expansion. Emerging market credit infrastructure buildout.",
+        "catalyst_date": "2026-05-21",
+        "catalyst_event": "FY2026 Results",
+        "catalyst_note": "Revenue acceleration + AI product revenue — triggers re-rating",
+    },
+    "SKA-B.ST": {
+        "name": "Skanska AB",
+        "theme": "European Defence Infrastructure",
+        "catalyst": "NATO infrastructure spending (bunkers, airfields, hardened command centres). Nordic countries committed to 3% GDP on defence. Sweden and Finland NATO membership triggering massive military construction pipeline. Swedish government infrastructure package 2026.",
+        "thesis": "Skanska builds the physical infrastructure for European rearmament — NATO-spec bunkers, runways, military bases and hardened facilities. The market prices it as a generic construction company; it is actually a primary beneficiary of the largest European defence build-up since WWII. Contracts are long-term and government-backed.",
+        "risk": "Construction cost inflation. Labour shortages in Nordics. Project delays on large-scale contracts.",
+        "macro": "European NATO rearmament. Nordic defence spending surge. EU defence infrastructure mandate.",
+        "catalyst_date": "2026-07-24",
+        "catalyst_event": "Q2 2026 Earnings",
+        "catalyst_note": "Defence construction order book — key thesis signal",
+    },
+}
+
+ALL_STOCKS = {**STOCKS, **CANDIDATE_POOL}
+
+# ── Active watchlist ───────────────────────────────────────────────────────────
+WATCHLIST_FILE    = Path("watchlist.json")
+REPLACEMENTS_FILE = Path("replacements.json")
+
+def _load_watchlist() -> list:
+    try:
+        if WATCHLIST_FILE.exists():
+            saved = json.loads(WATCHLIST_FILE.read_text())
+            if isinstance(saved, list) and saved:
+                return saved
+    except Exception:
+        pass
+    return list(STOCKS.keys())
+
+def _save_watchlist(wl: list):
+    WATCHLIST_FILE.write_text(json.dumps(wl))
+
+def _load_replacements() -> list:
+    try:
+        return json.loads(REPLACEMENTS_FILE.read_text()) if REPLACEMENTS_FILE.exists() else []
+    except Exception:
+        return []
+
+def _save_replacements(log: list):
+    REPLACEMENTS_FILE.write_text(json.dumps(log[-20:]))
+
+ACTIVE_WATCHLIST = _load_watchlist()
+
+# ── Exchange / Nordnet URL ────────────────────────────────────────────────────
 EXCHANGE_TO_NORDNET = {
     "NMS": "xnas", "NGM": "xnas", "NCM": "xnas",
     "NYQ": "xnys",
@@ -206,6 +347,7 @@ def nordnet_url(ticker: str, company_name: str, exchange_code: str) -> str | Non
     slug = re.sub(r"[^a-z0-9]+", "-", slug).strip("-")
     return f"https://www.nordnet.dk/aktier/kurser/{slug}-{clean_ticker}-{exc}"
 
+# ── Technical indicators ──────────────────────────────────────────────────────
 def compute_rsi(prices: pd.Series, period: int = 14) -> float:
     delta = prices.diff()
     gain = delta.where(delta > 0, 0.0).rolling(window=period).mean()
@@ -232,7 +374,6 @@ def compute_bollinger(prices: pd.Series, period: int = 20):
 def generate_signal(rsi, macd_hist, price, bb_upper, bb_lower, sma20, sma50):
     signals = []
     score = 0
-
     if rsi < 35:
         signals.append({"type": "BUY", "reason": f"RSI oversold ({rsi})"})
         score += 2
@@ -241,108 +382,112 @@ def generate_signal(rsi, macd_hist, price, bb_upper, bb_lower, sma20, sma50):
         score -= 2
     elif rsi < 50:
         score += 1
-
     if macd_hist > 0:
         signals.append({"type": "BUY", "reason": "MACD histogram positive (bullish momentum)"})
         score += 1
     else:
         signals.append({"type": "SELL", "reason": "MACD histogram negative (bearish momentum)"})
         score -= 1
-
     if price < bb_lower:
         signals.append({"type": "BUY", "reason": "Price below lower Bollinger Band (mean reversion setup)"})
         score += 2
     elif price > bb_upper:
         signals.append({"type": "SELL", "reason": "Price above upper Bollinger Band (extended)"})
         score -= 2
-
     if sma50 > 0 and price > sma50:
         signals.append({"type": "BUY", "reason": "Price above 50-day MA (uptrend)"})
         score += 1
     elif sma50 > 0:
         signals.append({"type": "SELL", "reason": "Price below 50-day MA (downtrend)"})
         score -= 1
-
     if score >= 3:
-        overall = "STRONG BUY"
-        color = "#00ff88"
+        overall, color = "STRONG BUY", "#00ff88"
     elif score >= 1:
-        overall = "BUY"
-        color = "#44cc77"
+        overall, color = "BUY", "#44cc77"
     elif score == 0:
-        overall = "HOLD"
-        color = "#ffaa00"
+        overall, color = "HOLD", "#ffaa00"
     elif score >= -2:
-        overall = "SELL"
-        color = "#ff6644"
+        overall, color = "SELL", "#ff6644"
     else:
-        overall = "STRONG SELL"
-        color = "#ff2244"
-
+        overall, color = "STRONG SELL", "#ff2244"
     return {"overall": overall, "color": color, "score": score, "signals": signals}
+
+# ── Core stock fetch ──────────────────────────────────────────────────────────
+def _fetch_stock_data(ticker: str) -> dict:
+    tk = yf.Ticker(ticker)
+    hist = tk.history(period="3mo", interval="1d")
+    if hist.empty:
+        return {"error": "No data"}
+    prices = hist["Close"]
+    current_price = float(prices.iloc[-1])
+    prev_price = float(prices.iloc[-2]) if len(prices) > 1 else current_price
+    change_pct = round((current_price - prev_price) / prev_price * 100, 2)
+    rsi = compute_rsi(prices)
+    macd_val, macd_sig, macd_hist = compute_macd(prices)
+    bb_upper, bb_mid, bb_lower = compute_bollinger(prices)
+    sma20 = float(prices.rolling(20).mean().iloc[-1]) if len(prices) >= 20 else 0
+    sma50 = float(prices.rolling(50).mean().iloc[-1]) if len(prices) >= 50 else 0
+    signal = generate_signal(rsi, macd_hist, current_price, bb_upper, bb_lower, sma20, sma50)
+    chart_data = [
+        {"date": str(d.date()), "close": round(float(c), 4), "volume": int(v)}
+        for d, c, v in zip(hist.index, hist["Close"], hist["Volume"])
+    ]
+    info = ALL_STOCKS.get(ticker, {})
+    info_raw = tk.info or {}
+    market_cap = info_raw.get("marketCap", 0)
+    company_name = info.get("name", info_raw.get("longName", ticker))
+    exchange_code = info_raw.get("exchange", "NMS")
+    nn_url = nordnet_url(ticker, company_name, exchange_code)
+    return {
+        "ticker": ticker,
+        "name": company_name,
+        "theme": info.get("theme", info_raw.get("sector", "")),
+        "catalyst": info.get("catalyst", ""),
+        "thesis": info.get("thesis", ""),
+        "risk": info.get("risk", ""),
+        "macro": info.get("macro", ""),
+        "catalyst_date": info.get("catalyst_date", ""),
+        "catalyst_event": info.get("catalyst_event", ""),
+        "catalyst_note": info.get("catalyst_note", ""),
+        "price": round(current_price, 2),
+        "change_pct": change_pct,
+        "market_cap": market_cap,
+        "rsi": rsi,
+        "macd": macd_val,
+        "macd_signal": macd_sig,
+        "macd_hist": macd_hist,
+        "bb_upper": bb_upper,
+        "bb_mid": bb_mid,
+        "bb_lower": bb_lower,
+        "sma20": round(sma20, 2),
+        "sma50": round(sma50, 2),
+        "signal": signal,
+        "chart_data": chart_data,
+        "nordnet_url": nn_url,
+        "nordnet_verified": ticker in ALL_STOCKS,
+        "updated_at": datetime.now().isoformat(),
+    }
 
 @app.get("/api/stock/{ticker}")
 def get_stock(ticker: str):
     try:
-        tk = yf.Ticker(ticker)
-        hist = tk.history(period="3mo", interval="1d")
-        if hist.empty:
-            return {"error": "No data"}
-
-        prices = hist["Close"]
-        current_price = float(prices.iloc[-1])
-        prev_price = float(prices.iloc[-2]) if len(prices) > 1 else current_price
-        change_pct = round((current_price - prev_price) / prev_price * 100, 2)
-
-        rsi = compute_rsi(prices)
-        macd_val, macd_sig, macd_hist = compute_macd(prices)
-        bb_upper, bb_mid, bb_lower = compute_bollinger(prices)
-
-        sma20 = float(prices.rolling(20).mean().iloc[-1]) if len(prices) >= 20 else 0
-        sma50 = float(prices.rolling(50).mean().iloc[-1]) if len(prices) >= 50 else 0
-
-        signal = generate_signal(rsi, macd_hist, current_price, bb_upper, bb_lower, sma20, sma50)
-
-        chart_data = [
-            {"date": str(d.date()), "close": round(float(c), 4), "volume": int(v)}
-            for d, c, v in zip(hist.index, hist["Close"], hist["Volume"])
-        ]
-
-        info = STOCKS.get(ticker, {})
-        info_raw = tk.info or {}
-        market_cap = info_raw.get("marketCap", 0)
-        company_name = info.get("name", info_raw.get("longName", ticker))
-        exchange_code = info_raw.get("exchange", "NMS")
-        nn_url = nordnet_url(ticker, company_name, exchange_code)
-
-        return {
-            "ticker": ticker,
-            "name": company_name,
-            "theme": info.get("theme", info_raw.get("sector", "")),
-            "catalyst": info.get("catalyst", ""),
-            "thesis": info.get("thesis", ""),
-            "risk": info.get("risk", ""),
-            "macro": info.get("macro", ""),
-            "price": round(current_price, 2),
-            "change_pct": change_pct,
-            "market_cap": market_cap,
-            "rsi": rsi,
-            "macd": macd_val,
-            "macd_signal": macd_sig,
-            "macd_hist": macd_hist,
-            "bb_upper": bb_upper,
-            "bb_mid": bb_mid,
-            "bb_lower": bb_lower,
-            "sma20": round(sma20, 2),
-            "sma50": round(sma50, 2),
-            "signal": signal,
-            "chart_data": chart_data,
-            "nordnet_url": nn_url,
-            "nordnet_verified": ticker in STOCKS,
-            "updated_at": datetime.now().isoformat()
-        }
+        return _fetch_stock_data(ticker)
     except Exception as e:
         return {"error": str(e), "ticker": ticker}
+
+@app.get("/api/stocks")
+def get_all_stocks():
+    results = []
+    for t in ACTIVE_WATCHLIST:
+        try:
+            results.append(_fetch_stock_data(t))
+        except Exception as e:
+            results.append({"error": str(e), "ticker": t})
+    return results
+
+@app.get("/api/replacements")
+def get_replacements():
+    return _load_replacements()
 
 @app.get("/api/search")
 def search_tickers(q: str = Query(default="", min_length=1)):
@@ -351,24 +496,90 @@ def search_tickers(q: str = Query(default="", min_length=1)):
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=4) as resp:
             data = json.loads(resp.read())
-        quotes = [
+        return [
             {"symbol": item["symbol"], "name": item.get("shortname") or item.get("longname", ""), "exchange": item.get("exchDisp", "")}
             for item in data.get("quotes", [])
             if item.get("quoteType") == "EQUITY"
         ]
-        return quotes
     except Exception:
         return []
-
-@app.get("/api/stocks")
-def get_all_stocks():
-    tickers = list(STOCKS.keys())
-    results = [get_stock(t) for t in tickers]
-    return results
 
 @app.get("/")
 def serve_index():
     return FileResponse("index.html")
+
+# ── Auto-refresh watchlist ────────────────────────────────────────────────────
+def _best_replacement(exclude: list) -> str | None:
+    best_ticker, best_score = None, -99
+    for ticker in CANDIDATE_POOL:
+        if ticker in exclude:
+            continue
+        try:
+            data = _fetch_stock_data(ticker)
+            if data.get("error"):
+                continue
+            score = data["signal"]["score"]
+            if score > best_score:
+                best_score = score
+                best_ticker = ticker
+        except Exception:
+            continue
+    return best_ticker if best_score >= 1 else None  # only promote BUY or better
+
+def _check_and_refresh():
+    global ACTIVE_WATCHLIST
+    today = date.today().isoformat()
+    log = _load_replacements()
+    changed = False
+
+    for ticker in ACTIVE_WATCHLIST[:]:
+        try:
+            data = _fetch_stock_data(ticker)
+        except Exception:
+            continue
+        if data.get("error"):
+            continue
+
+        signal = data["signal"]["overall"]
+        meta   = ALL_STOCKS.get(ticker, {})
+        reason = None
+
+        if signal in ("SELL", "STRONG SELL"):
+            reason = f"Signal turned {signal}"
+        else:
+            cat_date = meta.get("catalyst_date", "")
+            if cat_date and cat_date < today and signal not in ("BUY", "STRONG BUY"):
+                reason = f"Catalyst date {cat_date} passed — signal is {signal}"
+
+        if reason:
+            replacement = _best_replacement(ACTIVE_WATCHLIST)
+            if replacement:
+                idx = ACTIVE_WATCHLIST.index(ticker)
+                ACTIVE_WATCHLIST[idx] = replacement
+                log.append({
+                    "removed": ticker,
+                    "added": replacement,
+                    "reason": reason,
+                    "date": today,
+                })
+                print(f"[auto-refresh] Replaced {ticker} → {replacement}: {reason}")
+                changed = True
+
+    if changed:
+        _save_watchlist(ACTIVE_WATCHLIST)
+        _save_replacements(log)
+
+def _auto_refresh_loop():
+    import time
+    time.sleep(300)  # wait 5 min after startup before first check
+    while True:
+        try:
+            _check_and_refresh()
+        except Exception as e:
+            print(f"[auto-refresh] Error: {e}")
+        time.sleep(86400)  # recheck every 24 hours
+
+threading.Thread(target=_auto_refresh_loop, daemon=True).start()
 
 if __name__ == "__main__":
     import uvicorn
