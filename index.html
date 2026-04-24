@@ -1215,20 +1215,32 @@ function renderNordnetPreview() {
   document.getElementById('nordnet-preview').style.display = 'block';
 }
 
+// Map ISIN country prefix → preferred Yahoo Finance exchange suffix
+const ISIN_SUFFIX = { DK:'.CO', SE:'.ST', NO:'.OL', FI:'.HE', FR:'.PA', NL:'.AS', DE:'.DE', IT:'.MI', ES:'.MC' };
+
 async function resolveAllTickers() {
   for (let i = 0; i < nordnetParsed.length; i++) {
+    const p = nordnetParsed[i];
+    const inp = document.getElementById(`nn-ticker-${i}`);
     try {
-      const res = await fetch(`${API}/api/search?q=${encodeURIComponent(nordnetParsed[i].isin)}`);
-      const results = await res.json();
+      // 1. Search by ISIN
+      let results = await (await fetch(`${API}/api/search?q=${encodeURIComponent(p.isin)}`)).json();
+      // 2. Fall back to name search if ISIN returns nothing
+      if (!results.length && p.name) {
+        results = await (await fetch(`${API}/api/search?q=${encodeURIComponent(p.name)}`)).json();
+      }
       if (results.length) {
-        nordnetParsed[i].ticker = results[0].symbol;
-        const inp = document.getElementById(`nn-ticker-${i}`);
-        if (inp) inp.value = results[0].symbol;
+        // Prefer the result whose symbol ends with the expected exchange suffix for this ISIN
+        const suffix = ISIN_SUFFIX[p.isin.slice(0, 2)];
+        const best = (suffix && results.find(r => r.symbol.endsWith(suffix))) || results[0];
+        nordnetParsed[i].ticker = best.symbol;
+        if (inp) inp.value = best.symbol;
       } else {
-        const inp = document.getElementById(`nn-ticker-${i}`);
         if (inp) inp.placeholder = 'Not found — enter manually';
       }
-    } catch {}
+    } catch {
+      if (inp) inp.placeholder = 'Not found — enter manually';
+    }
   }
 }
 
