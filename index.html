@@ -188,7 +188,7 @@
             <tr style="border-bottom:1px solid var(--border)">
               <th class="text-left pb-2 pr-4" style="color:var(--muted);font-weight:500">Name</th>
               <th class="text-right pb-2 pr-4" style="color:var(--muted);font-weight:500">Shares</th>
-              <th class="text-right pb-2 pr-4" style="color:var(--muted);font-weight:500">Avg Price</th>
+              <th class="text-right pb-2 pr-4" style="color:var(--muted);font-weight:500">Avg Price <span style="font-weight:400;opacity:.6">(editable)</span></th>
               <th class="text-left pb-2" style="color:var(--muted);font-weight:500">Ticker <span style="font-weight:400;opacity:.6">(editable)</span></th>
             </tr>
           </thead>
@@ -1145,6 +1145,8 @@ function processNordnetCSV(text) {
     document.getElementById('nordnet-drop-label').textContent = '⚠ Could not read file — make sure it is a Nordnet transactions export';
     return;
   }
+  console.log('[Nordnet] headers:', headers);
+  console.log('[Nordnet] column indices:', idx);
 
   const rows = [];
   for (let i = 1; i < lines.length; i++) {
@@ -1163,19 +1165,21 @@ function processNordnetCSV(text) {
     });
   }
 
-  // Group by ISIN; track the most-recent row for Totalt antal + Indkøbsværdi
+  // Group by ISIN; track latest row for Totalt antal, accumulate Indkøbsværdi across all buy rows
   const byISIN = {};
   for (const r of rows) {
-    if (!byISIN[r.isin]) byISIN[r.isin] = { name: r.name, isin: r.isin, latestDate: '', latestTotalt: null, latestIndkoeb: 0, buys: [] };
+    if (!byISIN[r.isin]) byISIN[r.isin] = { name: r.name, isin: r.isin, latestDate: '', latestTotalt: null, totalIndkoeb: 0, buys: [] };
     const g = byISIN[r.isin];
     if (r.totalt !== null && r.date >= g.latestDate) {
       g.latestDate   = r.date;
       g.latestTotalt = r.totalt;
-      g.latestIndkoeb = r.indkoeb;
     }
+    // Sum Indkøbsværdi across every buy row → total cost invested for this ISIN
+    if (r.antal > 0 && r.indkoeb > 0) g.totalIndkoeb += r.indkoeb;
     if (isNordnetBuy(r.type) && r.antal > 0) g.buys.push(r);
   }
 
+  console.log('[Nordnet] byISIN sample:', Object.values(byISIN).slice(0,3));
   nordnetParsed = [];
   for (const isin in byISIN) {
     const g = byISIN[isin];
@@ -1184,23 +1188,15 @@ function processNordnetCSV(text) {
       : rows.filter(r => r.isin === isin).reduce((s, r) => s + r.antal, 0);
     if (shares <= 0.0001) continue;
 
-    // Primary: Indkøbsværdi ÷ shares (Nordnet's own cost-basis figure, no type parsing needed)
+    // Primary: sum of all Indkøbsværdi (total cost paid) ÷ current shares = GAV
     let avgPrice = 0;
-    if (g.latestIndkoeb > 0 && shares > 0) {
-      avgPrice = g.latestIndkoeb / shares;
+    if (g.totalIndkoeb > 0 && shares > 0) {
+      avgPrice = g.totalIndkoeb / shares;
     } else {
-      // Fallback 1: weighted average of detected buy transactions
+      // Fallback: weighted average of detected buy transactions using kurs
       let tv = 0, ts = 0;
       for (const b of g.buys) { tv += b.antal * b.kurs; ts += b.antal; }
-      if (ts > 0) {
-        avgPrice = tv / ts;
-      } else {
-        // Fallback 2: any row with positive antal + non-zero kurs (encoding-agnostic)
-        const posRows = rows.filter(r => r.isin === isin && r.antal > 0 && r.kurs > 0);
-        let tv2 = 0, ts2 = 0;
-        for (const r of posRows) { tv2 += r.antal * r.kurs; ts2 += r.antal; }
-        if (ts2 > 0) avgPrice = tv2 / ts2;
-      }
+      if (ts > 0) avgPrice = tv / ts;
     }
 
     nordnetParsed.push({ isin, name: g.name, shares: Math.round(shares * 1000) / 1000, avgPrice, ticker: '' });
