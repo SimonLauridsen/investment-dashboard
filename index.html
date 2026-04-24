@@ -1093,12 +1093,20 @@ function handleNordnetFile(file) {
   reader.onload = e => {
     const bytes = new Uint8Array(e.target.result);
     let text;
-    try {
-      // Nordnet often exports as Windows-1252; try UTF-8 first (strict), fall back
-      text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    } catch {
-      text = new TextDecoder('windows-1252').decode(bytes);
+    // Detect encoding from BOM before trying anything else
+    if (bytes[0] === 0xFF && bytes[1] === 0xFE) {
+      text = new TextDecoder('utf-16le').decode(bytes);
+    } else if (bytes[0] === 0xFE && bytes[1] === 0xFF) {
+      text = new TextDecoder('utf-16be').decode(bytes);
+    } else {
+      try {
+        text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      } catch {
+        text = new TextDecoder('windows-1252').decode(bytes);
+      }
     }
+    // Strip any BOM character left at the start of the string
+    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
     processNordnetCSV(text);
   };
   reader.readAsArrayBuffer(file);
