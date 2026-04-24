@@ -1081,13 +1081,29 @@ function handleNordnetFile(file) {
   if (!file) return;
   document.getElementById('nordnet-drop-label').textContent = file.name;
   const reader = new FileReader();
-  reader.onload = e => processNordnetCSV(e.target.result);
-  reader.readAsText(file, 'UTF-8');
+  reader.onload = e => {
+    const bytes = new Uint8Array(e.target.result);
+    let text;
+    try {
+      // Nordnet often exports as Windows-1252; try UTF-8 first (strict), fall back
+      text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch {
+      text = new TextDecoder('windows-1252').decode(bytes);
+    }
+    processNordnetCSV(text);
+  };
+  reader.readAsArrayBuffer(file);
 }
 
 function parseNN(str) {
   // Danish numbers: 1.234,56 → 1234.56
   return parseFloat(String(str || '').replace(/\./g, '').replace(',', '.')) || 0;
+}
+
+function isNordnetBuy(type) {
+  // Match KØB / KOB / KÖP / KJØP and encoding-garbled variants like K?B
+  const t = (type || '').trim();
+  return /^k.{0,2}[bp]$/i.test(t) || t.toUpperCase() === 'BUY';
 }
 
 function processNordnetCSV(text) {
@@ -1098,11 +1114,12 @@ function processNordnetCSV(text) {
 
   const idx = {
     type:   headers.findIndex(h => h.includes('transaktionstype')),
-    name:   headers.findIndex(h => h.includes('værdipapirer') || h.includes('instrument') || h === 'navn'),
+    name:   headers.findIndex(h => h.includes('rdpapirer') || h.includes('instrument') || h === 'navn'),
     isin:   headers.findIndex(h => h === 'isin'),
     antal:  headers.findIndex(h => h === 'antal'),
     kurs:   headers.findIndex(h => h === 'kurs'),
     totalt: headers.findIndex(h => h.includes('totalt antal')),
+    date:   headers.findIndex(h => h.includes('handelsdag') || h.includes('gf')),
   };
 
   if (idx.isin < 0) {
@@ -1118,6 +1135,7 @@ function processNordnetCSV(text) {
     rows.push({
       type:   (idx.type  >= 0 ? c[idx.type]  : '').toUpperCase(),
       name:   idx.name   >= 0 ? c[idx.name]   : isin,
+      date:   idx.date   >= 0 ? c[idx.date]   : '',
       isin,
       antal:  parseNN(idx.antal  >= 0 ? c[idx.antal]  : '0'),
       kurs:   parseNN(idx.kurs   >= 0 ? c[idx.kurs]   : '0'),
@@ -1125,20 +1143,24 @@ function processNordnetCSV(text) {
     });
   }
 
-  // Group by ISIN: track running total and buy transactions
+  // Group by ISIN; use the most-recent-dated row for current Totalt antal
+  // (handles both ascending and descending export order)
   const byISIN = {};
   for (const r of rows) {
-    if (!byISIN[r.isin]) byISIN[r.isin] = { name: r.name, isin: r.isin, lastTotalt: null, buys: [] };
-    if (r.totalt !== null) byISIN[r.isin].lastTotalt = r.totalt;
-    if (['KØB','KOB','KÖP','BUY'].includes(r.type) && r.antal > 0)
-      byISIN[r.isin].buys.push(r);
+    if (!byISIN[r.isin]) byISIN[r.isin] = { name: r.name, isin: r.isin, latestDate: '', latestTotalt: null, buys: [] };
+    const g = byISIN[r.isin];
+    if (r.totalt !== null && r.date >= g.latestDate) {
+      g.latestDate  = r.date;
+      g.latestTotalt = r.totalt;
+    }
+    if (isNordnetBuy(r.type) && r.antal > 0) g.buys.push(r);
   }
 
   nordnetParsed = [];
   for (const isin in byISIN) {
     const g = byISIN[isin];
-    const shares = g.lastTotalt !== null
-      ? g.lastTotalt
+    const shares = g.latestTotalt !== null
+      ? g.latestTotalt
       : rows.filter(r => r.isin === isin).reduce((s, r) => s + r.antal, 0);
     if (shares <= 0.0001) continue;
 
