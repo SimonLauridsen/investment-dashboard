@@ -1137,16 +1137,12 @@ function processNordnetCSV(text) {
     kurs:    headers.findIndex(h => h === 'kurs'),
     totalt:  headers.findIndex(h => h.includes('totalt antal')),
     date:    headers.findIndex(h => h.includes('handelsdag') || h.includes('gf')),
-    // Indkøbsværdi = cumulative purchase value; divide by shares → avg cost basis
-    indkoeb: headers.findIndex(h => h.includes('ndkøb') || h.includes('ndkob') || h.includes('anskaffelse')),
   };
 
   if (idx.isin < 0) {
     document.getElementById('nordnet-drop-label').textContent = '⚠ Could not read file — make sure it is a Nordnet transactions export';
     return;
   }
-  console.log('[Nordnet] headers:', headers);
-  console.log('[Nordnet] column indices:', idx);
 
   const rows = [];
   for (let i = 1; i < lines.length; i++) {
@@ -1161,25 +1157,20 @@ function processNordnetCSV(text) {
       antal:   parseNN(idx.antal   >= 0 ? c[idx.antal]   : '0'),
       kurs:    parseNN(idx.kurs    >= 0 ? c[idx.kurs]    : '0'),
       totalt:  idx.totalt  >= 0 ? parseNN(c[idx.totalt])  : null,
-      indkoeb: idx.indkoeb >= 0 ? parseNN(c[idx.indkoeb]) : 0,
     });
   }
 
-  // Group by ISIN; track latest row for Totalt antal, accumulate Indkøbsværdi across all buy rows
+  // Group by ISIN; track latest row for Totalt antal
   const byISIN = {};
   for (const r of rows) {
-    if (!byISIN[r.isin]) byISIN[r.isin] = { name: r.name, isin: r.isin, latestDate: '', latestTotalt: null, totalIndkoeb: 0, buys: [] };
+    if (!byISIN[r.isin]) byISIN[r.isin] = { name: r.name, isin: r.isin, latestDate: '', latestTotalt: null };
     const g = byISIN[r.isin];
     if (r.totalt !== null && r.date >= g.latestDate) {
       g.latestDate   = r.date;
       g.latestTotalt = r.totalt;
     }
-    // Sum Indkøbsværdi across every buy row → total cost invested for this ISIN
-    if (r.antal > 0 && r.indkoeb > 0) g.totalIndkoeb += r.indkoeb;
-    if (isNordnetBuy(r.type) && r.antal > 0) g.buys.push(r);
   }
 
-  console.log('[Nordnet] byISIN sample:', Object.values(byISIN).slice(0,3));
   nordnetParsed = [];
   for (const isin in byISIN) {
     const g = byISIN[isin];
@@ -1188,16 +1179,12 @@ function processNordnetCSV(text) {
       : rows.filter(r => r.isin === isin).reduce((s, r) => s + r.antal, 0);
     if (shares <= 0.0001) continue;
 
-    // Primary: sum of all Indkøbsværdi (total cost paid) ÷ current shares = GAV
-    let avgPrice = 0;
-    if (g.totalIndkoeb > 0 && shares > 0) {
-      avgPrice = g.totalIndkoeb / shares;
-    } else {
-      // Fallback: weighted average of detected buy transactions using kurs
-      let tv = 0, ts = 0;
-      for (const b of g.buys) { tv += b.antal * b.kurs; ts += b.antal; }
-      if (ts > 0) avgPrice = tv / ts;
-    }
+    // GAV = weighted average of kurs across buy rows, in the stock's own currency.
+    // indkøbsværdi is in DKK (account currency) so cannot be used directly for non-DKK stocks.
+    const buyRows = rows.filter(r => r.isin === isin && r.antal > 0 && r.kurs > 0);
+    let tv = 0, ts = 0;
+    for (const r of buyRows) { tv += r.antal * r.kurs; ts += r.antal; }
+    const avgPrice = ts > 0 ? tv / ts : 0;
 
     nordnetParsed.push({ isin, name: g.name, shares: Math.round(shares * 1000) / 1000, avgPrice, ticker: '' });
   }
