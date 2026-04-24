@@ -1,18 +1,134 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime
-import json
+from pathlib import Path
+import json, os, hmac, hashlib, base64
 import urllib.request
 import urllib.parse
 
+# ── Auth config ───────────────────────────────────────────────────────────────
+SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
+DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
+CUSTOM_FILE = Path("custom_tickers.json")
+
+def _make_token() -> str:
+    msg = b"authenticated"
+    sig = hmac.new(SECRET_KEY.encode(), msg, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(msg + b"|" + sig).decode()
+
+def _verify_token(token: str) -> bool:
+    try:
+        decoded = base64.urlsafe_b64decode(token.encode())
+        msg, sig = decoded.split(b"|", 1)
+        expected = hmac.new(SECRET_KEY.encode(), msg, hashlib.sha256).digest()
+        return hmac.compare_digest(sig, expected) and msg == b"authenticated"
+    except Exception:
+        return False
+
+LOGIN_HTML = """<!DOCTYPE html>
+<html>
+<head>
+  <title>Speculative Alpha — Sign in</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    *{{box-sizing:border-box;margin:0;padding:0}}
+    body{{background:#0a0f1e;color:#e5e7eb;font-family:system-ui,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center}}
+    .card{{background:#111827;border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:44px 40px;width:100%;max-width:380px}}
+    h1{{font-size:20px;font-weight:700;margin-bottom:6px;letter-spacing:-.3px}}
+    .sub{{color:#6b7280;font-size:13px;margin-bottom:32px}}
+    label{{font-size:12px;color:#9ca3af;display:block;margin-bottom:6px;font-weight:500}}
+    input[type=password]{{width:100%;background:#0a0f1e;border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:11px 14px;color:#e5e7eb;font-size:14px;outline:none;margin-bottom:16px;transition:border .15s}}
+    input[type=password]:focus{{border-color:#3b82f6}}
+    button{{width:100%;background:#3b82f6;color:#fff;border:none;border-radius:8px;padding:12px;font-size:14px;font-weight:600;cursor:pointer;transition:background .15s}}
+    button:hover{{background:#2563eb}}
+    .error{{color:#ef4444;font-size:13px;margin-bottom:14px;padding:10px 12px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px}}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>⚡ Speculative Alpha</h1>
+    <p class="sub">Personal investment dashboard</p>
+    {error}
+    <form method="post" action="/login">
+      <label>Password</label>
+      <input type="password" name="password" autofocus placeholder="Enter your password">
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
+</body>
+</html>"""
+
+# ── Auth middleware ────────────────────────────────────────────────────────────
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path in ("/login", "/logout"):
+            return await call_next(request)
+        token = request.cookies.get("sa_session", "")
+        if not _verify_token(token):
+            return RedirectResponse("/login", status_code=302)
+        return await call_next(request)
+
 app = FastAPI()
+app.add_middleware(AuthMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+# ── Auth endpoints ────────────────────────────────────────────────────────────
+@app.get("/login", response_class=HTMLResponse)
+def login_page():
+    return LOGIN_HTML.format(error="")
+
+@app.post("/login")
+async def do_login(password: str = Form(...)):
+    if DASHBOARD_PASSWORD and password == DASHBOARD_PASSWORD:
+        resp = RedirectResponse("/", status_code=303)
+        resp.set_cookie("sa_session", _make_token(), httponly=True,
+                        max_age=60 * 60 * 24 * 30, samesite="lax")
+        return resp
+    error = '<p class="error">Incorrect password</p>'
+    if not DASHBOARD_PASSWORD:
+        error = '<p class="error">DASHBOARD_PASSWORD environment variable not set.</p>'
+    return HTMLResponse(LOGIN_HTML.format(error=error), status_code=401)
+
+@app.post("/logout")
+def logout():
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie("sa_session")
+    return resp
+
+# ── Custom tickers persistence ────────────────────────────────────────────────
+def _read_custom() -> list:
+    try:
+        return json.loads(CUSTOM_FILE.read_text()) if CUSTOM_FILE.exists() else []
+    except Exception:
+        return []
+
+def _write_custom(tickers: list):
+    CUSTOM_FILE.write_text(json.dumps(tickers))
+
+@app.get("/api/custom")
+def get_custom():
+    return _read_custom()
+
+@app.post("/api/custom/{ticker}")
+def add_custom(ticker: str):
+    tickers = _read_custom()
+    if ticker not in tickers:
+        tickers.append(ticker)
+        _write_custom(tickers)
+    return tickers
+
+@app.delete("/api/custom/{ticker}")
+def remove_custom(ticker: str):
+    tickers = [t for t in _read_custom() if t != ticker]
+    _write_custom(tickers)
+    return tickers
+
+# ── Stock data ─────────────────────────────────────────────────────────────────
 STOCKS = {
     "NNE": {
         "name": "NANO Nuclear Energy Inc.",
@@ -65,17 +181,17 @@ STOCKS = {
 }
 
 EXCHANGE_TO_NORDNET = {
-    "NMS": "xnas", "NGM": "xnas", "NCM": "xnas",  # NASDAQ tiers
-    "NYQ": "xnys",                                   # NYSE
-    "ASE": "xnas",                                   # NYSE American
-    "AMS": "xams",                                   # Euronext Amsterdam
-    "OSL": "xosl",                                   # Oslo Børs
-    "CPH": "xcse",                                   # Nasdaq Copenhagen
-    "STO": "xsto",                                   # Nasdaq Stockholm
-    "HEL": "xhel",                                   # Nasdaq Helsinki
-    "LSE": "xlon",                                   # London Stock Exchange
-    "GER": "xetr", "XETR": "xetr",                  # Xetra (Frankfurt)
-    "PNK": None,                                     # OTC Pink — not on Nordnet
+    "NMS": "xnas", "NGM": "xnas", "NCM": "xnas",
+    "NYQ": "xnys",
+    "ASE": "xnas",
+    "AMS": "xams",
+    "OSL": "xosl",
+    "CPH": "xcse",
+    "STO": "xsto",
+    "HEL": "xhel",
+    "LSE": "xlon",
+    "GER": "xetr", "XETR": "xetr",
+    "PNK": None,
     "OTC": None,
 }
 
@@ -84,7 +200,6 @@ def nordnet_url(ticker: str, company_name: str, exchange_code: str) -> str | Non
     if exc is None:
         return None
     import re
-    # Strip Yahoo Finance exchange suffix (.AS, .OL, .CO, .ST, .L, .DE, .HE, .PA, etc.)
     clean_ticker = re.sub(r'\.[A-Z]{1,2}$', '', ticker).lower()
     drop = r"\b(inc\.?|corp\.?|ltd\.?|llc\.?|plc\.?|ag|sa|nv|n\.v\.?|bv|b\.v\.?|asa|a\.s\.?|a/s|oyj|ab|holdings?|group|co\.?)\b"
     slug = re.sub(drop, "", company_name.lower())
