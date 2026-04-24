@@ -12,32 +12,62 @@ import urllib.request
 import urllib.parse
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
-SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
+SECRET_KEY  = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
+INVITE_CODE = os.environ.get("INVITE_CODE", "")
+USERS_FILE  = Path("users.json")
 
-def _parse_users() -> dict:
-    """Parse USERS env var: 'simon:pass1,lars:pass2' → {simon: pass1, lars: pass2}.
-    Falls back to DASHBOARD_PASSWORD with username 'admin' for backward compat."""
-    raw = os.environ.get("USERS", "").strip()
-    users = {}
-    if raw:
-        for entry in raw.split(","):
-            entry = entry.strip()
-            if ":" in entry:
-                u, p = entry.split(":", 1)
-                users[u.strip().lower()] = p.strip()
-    elif os.environ.get("DASHBOARD_PASSWORD"):
-        users["admin"] = os.environ["DASHBOARD_PASSWORD"]
-    return users
+# -- Password hashing (stdlib only, no bcrypt dependency) ----------------------
+def _hash_pw(pw: str) -> str:
+    salt = os.urandom(16).hex()
+    dk = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), 260_000)
+    return f"pbkdf2:{salt}:{dk.hex()}"
 
-USERS = _parse_users()
+def _check_pw(pw: str, stored: str) -> bool:
+    try:
+        _, salt, dk_hex = stored.split(":", 2)
+        dk = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), 260_000)
+        return hmac.compare_digest(dk.hex(), dk_hex)
+    except Exception:
+        return False
 
+# -- File-backed user store ----------------------------------------------------
+def _load_users() -> dict:
+    try:
+        return json.loads(USERS_FILE.read_text()) if USERS_FILE.exists() else {}
+    except Exception:
+        return {}
+
+def _save_users(users: dict):
+    USERS_FILE.write_text(json.dumps(users))
+
+def _init_users():
+    """Seed accounts from USERS / DASHBOARD_PASSWORD env vars on every startup."""
+    users = _load_users()
+    changed = False
+    for entry in os.environ.get("USERS", "").split(","):
+        entry = entry.strip()
+        if ":" in entry:
+            u, p = entry.split(":", 1)
+            u = u.strip().lower()
+            if u not in users:
+                users[u] = _hash_pw(p.strip())
+                changed = True
+    dp = os.environ.get("DASHBOARD_PASSWORD", "")
+    if dp and "admin" not in users:
+        users["admin"] = _hash_pw(dp)
+        changed = True
+    if changed:
+        _save_users(users)
+
+_init_users()
+
+# -- Session tokens ------------------------------------------------------------
 def _make_token(username: str) -> str:
     msg = f"auth:{username}".encode()
     sig = hmac.new(SECRET_KEY.encode(), msg, hashlib.sha256).digest()
     return base64.urlsafe_b64encode(msg + b"|" + sig).decode()
 
 def _verify_token(token: str) -> str | None:
-    """Returns username if valid, None otherwise."""
     try:
         decoded = base64.urlsafe_b64decode(token.encode())
         msg, sig = decoded.split(b"|", 1)
@@ -49,12 +79,8 @@ def _verify_token(token: str) -> str | None:
     except Exception:
         return None
 
-LOGIN_HTML = """<!DOCTYPE html>
-<html>
-<head>
-  <title>Speculative Alpha — Sign in</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <style>
+# -- Shared HTML base for auth pages -------------------------------------------
+_AUTH_CSS = """
     *{{box-sizing:border-box;margin:0;padding:0}}
     body{{background:#0a0f1e;color:#e5e7eb;font-family:system-ui,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center}}
     .card{{background:#111827;border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:44px 40px;width:100%;max-width:380px}}
@@ -66,13 +92,19 @@ LOGIN_HTML = """<!DOCTYPE html>
     button{{width:100%;background:#3b82f6;color:#fff;border:none;border-radius:8px;padding:12px;font-size:14px;font-weight:600;cursor:pointer;transition:background .15s}}
     button:hover{{background:#2563eb}}
     .error{{color:#ef4444;font-size:13px;margin-bottom:14px;padding:10px 12px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px}}
-  </style>
-</head>
-<body>
+    .link{{display:block;text-align:center;margin-top:20px;font-size:13px;color:#6b7280}}
+    .link a{{color:#3b82f6;text-decoration:none}}
+    .link a:hover{{text-decoration:underline}}
+"""
+
+LOGIN_HTML = f"""<!DOCTYPE html><html><head>
+  <title>Speculative Alpha — Sign in</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>{_AUTH_CSS}</style></head><body>
   <div class="card">
     <h1>⚡ Speculative Alpha</h1>
     <p class="sub">Personal investment dashboard</p>
-    {error}
+    {{error}}
     <form method="post" action="/login">
       <label>Username</label>
       <input type="text" name="username" autofocus autocomplete="username" placeholder="Your username">
@@ -80,13 +112,35 @@ LOGIN_HTML = """<!DOCTYPE html>
       <input type="password" name="password" autocomplete="current-password" placeholder="Your password">
       <button type="submit">Sign in</button>
     </form>
-  </div>
-</body>
-</html>"""
+    <p class="link"><a href="/register">Create an account →</a></p>
+  </div></body></html>"""
 
+REGISTER_HTML = f"""<!DOCTYPE html><html><head>
+  <title>Speculative Alpha — Create account</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>{_AUTH_CSS}</style></head><body>
+  <div class="card">
+    <h1>⚡ Speculative Alpha</h1>
+    <p class="sub">Create your account</p>
+    {{error}}
+    <form method="post" action="/register">
+      <label>Invite code</label>
+      <input type="password" name="invite_code" placeholder="Ask Simon for the invite code">
+      <label>Choose a username</label>
+      <input type="text" name="username" autocomplete="username" placeholder="e.g. lars">
+      <label>Choose a password</label>
+      <input type="password" name="password" autocomplete="new-password" placeholder="Min. 6 characters">
+      <label>Confirm password</label>
+      <input type="password" name="confirm" autocomplete="new-password" placeholder="Repeat your password">
+      <button type="submit">Create account</button>
+    </form>
+    <p class="link"><a href="/login">← Back to sign in</a></p>
+  </div></body></html>"""
+
+# -- Middleware ----------------------------------------------------------------
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        if request.url.path in ("/login", "/logout"):
+        if request.url.path in ("/login", "/logout", "/register"):
             return await call_next(request)
         username = _verify_token(request.cookies.get("sa_session", ""))
         if not username:
@@ -105,15 +159,49 @@ def login_page():
 @app.post("/login")
 async def do_login(username: str = Form(...), password: str = Form(...)):
     uname = username.strip().lower()
-    if not USERS:
-        err = '<p class="error">USERS environment variable not set.</p>'
-        return HTMLResponse(LOGIN_HTML.format(error=err), status_code=401)
-    if uname in USERS and USERS[uname] == password:
+    users = _load_users()
+    if uname in users and _check_pw(password, users[uname]):
         resp = RedirectResponse("/", status_code=303)
         resp.set_cookie("sa_session", _make_token(uname), httponly=True,
                         max_age=60 * 60 * 24 * 30, samesite="lax")
         return resp
-    return HTMLResponse(LOGIN_HTML.format(error='<p class="error">Invalid username or password</p>'), status_code=401)
+    err = '<p class="error">Invalid username or password</p>'
+    if not users:
+        err = '<p class="error">No accounts exist yet — <a href="/register" style="color:#3b82f6">create one</a>.</p>'
+    return HTMLResponse(LOGIN_HTML.format(error=err), status_code=401)
+
+@app.get("/register", response_class=HTMLResponse)
+def register_page():
+    if not INVITE_CODE:
+        return RedirectResponse("/login", status_code=302)
+    return REGISTER_HTML.format(error="")
+
+@app.post("/register")
+async def do_register(invite_code: str = Form(...), username: str = Form(...),
+                      password: str = Form(...), confirm: str = Form(...)):
+    def err(msg): return HTMLResponse(REGISTER_HTML.format(error=f'<p class="error">{msg}</p>'), 400)
+    if not INVITE_CODE:
+        return RedirectResponse("/login", status_code=302)
+    if invite_code != INVITE_CODE:
+        return err("Wrong invite code.")
+    uname = username.strip().lower()
+    if len(uname) < 2:
+        return err("Username must be at least 2 characters.")
+    if not uname.isalnum():
+        return err("Username can only contain letters and numbers.")
+    if len(password) < 6:
+        return err("Password must be at least 6 characters.")
+    if password != confirm:
+        return err("Passwords do not match.")
+    users = _load_users()
+    if uname in users:
+        return err("That username is already taken.")
+    users[uname] = _hash_pw(password)
+    _save_users(users)
+    resp = RedirectResponse("/", status_code=303)
+    resp.set_cookie("sa_session", _make_token(uname), httponly=True,
+                    max_age=60 * 60 * 24 * 30, samesite="lax")
+    return resp
 
 @app.post("/logout")
 def logout():
