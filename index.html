@@ -1206,10 +1206,13 @@ function renderNordnetPreview() {
       <td class="py-2 pr-4" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${p.name}">${p.name}</td>
       <td class="py-2 pr-4 text-right">${p.shares}</td>
       <td class="py-2 pr-4 text-right">${p.avgPrice > 0 ? p.avgPrice.toFixed(2) : '—'}</td>
-      <td class="py-2">
+      <td class="py-2 pr-4">
         <input type="text" id="nn-ticker-${i}" value="${p.ticker}" placeholder="Resolving…"
                style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;color:var(--fg);font-size:12px;width:110px"
                oninput="nordnetParsed[${i}].ticker=this.value.trim().toUpperCase()">
+      </td>
+      <td class="py-2">
+        <button onclick="removeNordnetRow(${i})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;padding:2px 6px" title="Remove">✕</button>
       </td>
     </tr>`).join('');
   document.getElementById('nordnet-preview').style.display = 'block';
@@ -1218,28 +1221,48 @@ function renderNordnetPreview() {
 // Map ISIN country prefix → preferred Yahoo Finance exchange suffix
 const ISIN_SUFFIX = { DK:'.CO', SE:'.ST', NO:'.OL', FI:'.HE', FR:'.PA', NL:'.AS', DE:'.DE', IT:'.MI', ES:'.MC' };
 
+function removeNordnetRow(i) {
+  nordnetParsed.splice(i, 1);
+  renderNordnetPreview();
+  // Re-index existing resolved tickers (already stored in nordnetParsed objects)
+}
+
+async function searchTickers(q) {
+  try {
+    return await (await fetch(`${API}/api/search?q=${encodeURIComponent(q)}`)).json();
+  } catch { return []; }
+}
+
 async function resolveAllTickers() {
   for (let i = 0; i < nordnetParsed.length; i++) {
     const p = nordnetParsed[i];
     const inp = document.getElementById(`nn-ticker-${i}`);
-    try {
-      // 1. Search by ISIN
-      let results = await (await fetch(`${API}/api/search?q=${encodeURIComponent(p.isin)}`)).json();
-      // 2. Fall back to name search if ISIN returns nothing
-      if (!results.length && p.name) {
-        results = await (await fetch(`${API}/api/search?q=${encodeURIComponent(p.name)}`)).json();
-      }
-      if (results.length) {
-        // Prefer the result whose symbol ends with the expected exchange suffix for this ISIN
-        const suffix = ISIN_SUFFIX[p.isin.slice(0, 2)];
-        const best = (suffix && results.find(r => r.symbol.endsWith(suffix))) || results[0];
-        nordnetParsed[i].ticker = best.symbol;
-        if (inp) inp.value = best.symbol;
-      } else {
-        if (inp) inp.placeholder = 'Not found — enter manually';
-      }
-    } catch {
-      if (inp) inp.placeholder = 'Not found — enter manually';
+    const suffix = ISIN_SUFFIX[p.isin.slice(0, 2)];
+
+    const pickBest = results => (suffix && results.find(r => r.symbol.endsWith(suffix))) || results[0];
+
+    // Try progressively: ISIN → full name → first two words → first word
+    const queries = [p.isin];
+    if (p.name) {
+      const words = p.name.trim().split(/\s+/);
+      queries.push(p.name);
+      if (words.length > 2) queries.push(words.slice(0, 2).join(' '));
+      if (words.length > 1) queries.push(words[0]);
+    }
+
+    let best = null;
+    for (const q of queries) {
+      const results = await searchTickers(q);
+      const match = suffix ? results.find(r => r.symbol.endsWith(suffix)) : null;
+      if (match) { best = match; break; }
+      if (results.length && !best) best = results[0]; // keep as fallback, keep trying for suffix match
+    }
+
+    if (best) {
+      nordnetParsed[i].ticker = best.symbol;
+      if (inp) inp.value = best.symbol;
+    } else {
+      if (inp) { inp.value = ''; inp.placeholder = 'Not found — enter manually'; }
     }
   }
 }
