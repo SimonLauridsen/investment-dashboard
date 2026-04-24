@@ -1,0 +1,951 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Speculative Alpha Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root {
+    --bg:#0a0e1a; --card:#111827; --border:#1f2937;
+    --text:#e5e7eb; --muted:#6b7280;
+    --accent:#3b82f6; --green:#10b981; --red:#ef4444;
+    --yellow:#f59e0b; --purple:#8b5cf6;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,sans-serif;min-height:100vh}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px}
+  .badge{display:inline-block;padding:2px 10px;border-radius:9999px;font-size:11px;font-weight:600;letter-spacing:.05em}
+  .signal-pill{padding:4px 14px;border-radius:9999px;font-size:12px;font-weight:700;letter-spacing:.08em}
+  .stock-card{cursor:pointer;transition:border-color .2s,transform .15s}
+  .stock-card:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .stock-card.selected{border-color:var(--accent);box-shadow:0 0 0 2px rgba(59,130,246,.3)}
+  .stock-card.holding{border-color:rgba(16,185,129,.4)}
+  .stock-card.holding.selected{border-color:var(--accent)}
+  .indicator-bar{height:4px;border-radius:2px;background:var(--border);overflow:hidden}
+  .indicator-fill{height:100%;border-radius:2px;transition:width .5s ease}
+  .pulse{animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+  .slide-in{animation:slideIn .3s ease}
+  @keyframes slideIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+  .detail-chart{position:relative;height:340px}
+  .ticker-tape{overflow:hidden;white-space:nowrap;border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:#0d1117;padding:8px 0}
+  .ticker-tape-inner{display:inline-block;animation:scroll 30s linear infinite}
+  @keyframes scroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+  .tab-btn{padding:8px 20px;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;border:1px solid transparent}
+  .tab-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .tab-btn:not(.active){color:var(--muted);border-color:var(--border)}
+  .tab-btn:not(.active):hover{color:var(--text);background:var(--border)}
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);backdrop-filter:blur(4px);z-index:200;display:flex;align-items:center;justify-content:center}
+  .modal-box{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:28px;width:440px;max-width:95vw}
+  .input-field{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-size:14px;outline:none;transition:border-color .15s}
+  .input-field:focus{border-color:var(--accent)}
+  .btn-primary{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:14px;font-weight:600;cursor:pointer;transition:opacity .15s}
+  .btn-primary:hover{opacity:.85}
+  .btn-ghost{background:var(--border);color:var(--muted);border:none;border-radius:8px;padding:10px 20px;font-size:14px;cursor:pointer}
+  .btn-danger{background:rgba(239,68,68,.15);color:#ef4444;border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer}
+  .btn-danger:hover{background:rgba(239,68,68,.25)}
+  .stop-btn{border-radius:8px;padding:8px 12px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:var(--bg);color:var(--muted);transition:all .15s}
+  .exit-alert{border-radius:10px;padding:12px 16px;border:1px solid rgba(239,68,68,.4);background:rgba(239,68,68,.1);animation:alertPulse 2s infinite}
+  @keyframes alertPulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.3)}50%{box-shadow:0 0 0 6px rgba(239,68,68,0)}}
+  .target-hit{border-radius:10px;padding:12px 16px;border:1px solid rgba(16,185,129,.4);background:rgba(16,185,129,.1);animation:targetPulse 2s infinite}
+  @keyframes targetPulse{0%,100%{box-shadow:0 0 0 0 rgba(16,185,129,.3)}50%{box-shadow:0 0 0 6px rgba(16,185,129,0)}}
+  .search-input-wrap{position:relative}
+  .search-input-wrap input{padding-right:120px}
+  .search-add-btn{position:absolute;right:6px;top:50%;transform:translateY(-50%);background:var(--accent);color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:13px;font-weight:600;cursor:pointer}
+  .search-add-btn:disabled{opacity:.5;cursor:not-allowed}
+  .search-error{color:#ef4444;font-size:12px;margin-top:6px}
+  .suggestions-dropdown{position:absolute;top:calc(100% + 4px);left:0;right:0;background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;z-index:100;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+  .suggestion-item{padding:9px 14px;cursor:pointer;display:flex;align-items:center;gap:10px;transition:background .1s}
+  .suggestion-item:hover,.suggestion-item.active{background:rgba(255,255,255,.06)}
+  .suggestion-ticker{font-weight:700;font-size:13px;color:var(--accent);min-width:70px}
+  .suggestion-name{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .suggestion-exchange{font-size:11px;color:var(--muted);opacity:.6;margin-left:auto;flex-shrink:0}
+</style>
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────────────────────── -->
+<div class="border-b" style="border-color:var(--border);background:rgba(17,24,39,.95);backdrop-filter:blur(10px);position:sticky;top:0;z-index:50;">
+  <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-lg flex items-center justify-center" style="background:linear-gradient(135deg,#3b82f6,#8b5cf6)">
+        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
+      </div>
+      <div>
+        <h1 class="text-base font-bold tracking-tight">Speculative Alpha</h1>
+        <p class="text-xs" style="color:var(--muted)">Live signal dashboard</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-4">
+      <div id="portfolio-bar" style="display:none" class="flex items-center gap-3 text-sm"></div>
+      <div class="flex items-center gap-2">
+        <div class="w-2 h-2 rounded-full pulse" style="background:var(--green)" id="live-dot"></div>
+        <span class="text-xs" style="color:var(--muted)" id="last-update">Connecting...</span>
+      </div>
+      <button onclick="refreshAll()" class="px-3 py-1.5 rounded-lg text-xs font-medium" style="background:var(--border);color:var(--text)">Refresh</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Ticker tape ─────────────────────────────────────────────────────────── -->
+<div class="ticker-tape" id="ticker-tape-wrap" style="display:none">
+  <div class="ticker-tape-inner" id="ticker-tape-inner"></div>
+</div>
+
+<!-- ── Buy modal ──────────────────────────────────────────────────────────── -->
+<div id="buy-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeBuyModal()">
+  <div class="modal-box slide-in">
+    <div class="flex items-center justify-between mb-5">
+      <div>
+        <h2 class="text-lg font-bold" id="modal-title">Record Purchase</h2>
+        <p class="text-xs mt-1" style="color:var(--muted)" id="modal-subtitle"></p>
+      </div>
+      <button onclick="closeBuyModal()" style="color:var(--muted);font-size:22px;cursor:pointer;background:none;border:none">&times;</button>
+    </div>
+    <div class="space-y-4">
+      <div>
+        <label class="text-xs font-semibold mb-2 block" style="color:var(--muted)">PURCHASE PRICE (USD)</label>
+        <input id="modal-price" type="number" step="0.01" class="input-field" placeholder="0.00"/>
+      </div>
+      <div>
+        <label class="text-xs font-semibold mb-2 block" style="color:var(--muted)">PURCHASE DATE</label>
+        <input id="modal-date" type="date" class="input-field"/>
+      </div>
+      <div>
+        <label class="text-xs font-semibold mb-2 block" style="color:var(--muted)">SHARES <span style="font-weight:400;color:var(--muted)">(optional — for P&L in $)</span></label>
+        <input id="modal-shares" type="number" step="1" class="input-field" placeholder="e.g. 100"/>
+      </div>
+      <div>
+        <label class="text-xs font-semibold mb-2 block" style="color:var(--muted)">STOP LOSS</label>
+        <div class="grid grid-cols-3 gap-2" id="stop-style-selector">
+          <button class="stop-btn" data-val="20"   onclick="selectStop(this)">−20% Fixed</button>
+          <button class="stop-btn" data-val="25"   onclick="selectStop(this)">−25% Fixed</button>
+          <button class="stop-btn" data-val="trail" onclick="selectStop(this)">25% Trailing</button>
+        </div>
+      </div>
+    </div>
+    <div class="flex gap-3 mt-6">
+      <button onclick="saveBought()" class="btn-primary flex-1">Save</button>
+      <button onclick="closeBuyModal()" class="btn-ghost">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Main ───────────────────────────────────────────────────────────────── -->
+<div class="max-w-7xl mx-auto px-6 py-6">
+
+  <!-- Tab bar -->
+  <div class="flex items-center gap-3 mb-6">
+    <button id="tab-watchlist" class="tab-btn active" onclick="switchTab('watchlist')">Watchlist — 6 Picks</button>
+    <button id="tab-custom"    class="tab-btn"        onclick="switchTab('custom')">
+      My Dashboard
+      <span id="custom-count" class="ml-2 px-2 py-0.5 rounded-full text-xs" style="background:var(--border);color:var(--muted)">0</span>
+    </button>
+  </div>
+
+  <!-- ── WATCHLIST TAB ─────────────────────────────────────────────────── -->
+  <div id="tab-watchlist-content">
+    <!-- Context banner -->
+    <div class="card p-4 mb-4" style="border-color:rgba(59,130,246,.3);background:rgba(59,130,246,.05)">
+      <div class="flex flex-wrap gap-6 text-sm">
+        <div><span class="font-semibold" style="color:var(--accent)">Macro Context</span><span class="ml-2" style="color:var(--muted)">US equities 12% below fair value · AI power demand quadrupling · Growth sector at 5-year discount</span></div>
+        <div><span class="font-semibold" style="color:var(--purple)">Geopolitical</span><span class="ml-2" style="color:var(--muted)">China rare earth chokehold · Jan 2027 Pentagon ban · Project Vault $12B · US-Greenland dynamics</span></div>
+        <div><span class="font-semibold" style="color:var(--yellow)">Catalyst Window</span><span class="ml-2" style="color:var(--muted)">3-month horizon · May–July 2026 · Multiple binary events</span></div>
+      </div>
+    </div>
+    <!-- Search schedule -->
+    <div class="card p-4 mb-6">
+      <div class="flex items-center justify-between mb-3">
+        <span class="text-xs font-semibold" style="color:var(--muted)">NEXT TICKER REFRESH WINDOWS</span>
+        <span class="text-xs" style="color:var(--muted)">Replace once a catalyst fires or the thesis breaks</span>
+      </div>
+      <div class="flex flex-wrap gap-3" id="search-schedule-items"></div>
+    </div>
+    <!-- Stock grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mb-6" id="watchlist-grid">
+      <div class="card p-6 flex items-center justify-center" style="min-height:200px;grid-column:1/-1">
+        <div class="text-center" style="color:var(--muted)"><div class="text-xl mb-2">Loading market data...</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── CUSTOM TAB ────────────────────────────────────────────────────── -->
+  <div id="tab-custom-content" style="display:none">
+    <!-- Search bar -->
+    <div class="card p-5 mb-6">
+      <div class="mb-3">
+        <span class="text-sm font-semibold">Add a ticker</span>
+        <span class="text-xs ml-2" style="color:var(--muted)">Type any stock symbol or company name</span>
+      </div>
+      <div class="search-input-wrap" style="max-width:420px">
+        <input id="custom-search-input" class="input-field" type="text" placeholder="e.g. NVDA, TSLA, ASML…"
+          autocomplete="off"
+          onkeydown="handleSearchKey(event)"
+          oninput="onSearchInput(event)"/>
+        <button class="search-add-btn" id="search-add-btn" onclick="addCustomTicker()">Add to Dashboard</button>
+        <div id="suggestions-dropdown" class="suggestions-dropdown" style="display:none"></div>
+      </div>
+      <div id="search-error" class="search-error"></div>
+    </div>
+    <!-- Custom grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mb-6" id="custom-grid">
+      <div class="card p-10 flex flex-col items-center justify-center" style="grid-column:1/-1;min-height:240px;border-style:dashed" id="custom-empty">
+        <svg class="w-10 h-10 mb-3" style="color:var(--muted)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4v16m8-8H4"/></svg>
+        <p class="font-semibold mb-1" style="color:var(--muted)">Your dashboard is empty</p>
+        <p class="text-sm" style="color:var(--muted)">Search for a ticker above to start tracking it</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Shared detail panel ───────────────────────────────────────────── -->
+  <div class="card p-6 slide-in" id="detail-panel" style="display:none">
+    <div id="detail-content"></div>
+  </div>
+
+</div><!-- /max-w-7xl -->
+
+<script>
+// ── Constants & state ─────────────────────────────────────────────────────────
+const API = 'http://localhost:8000';
+const WATCHLIST_TICKERS = ['NNE','LUNR','CRML','RGTI','ASML.AS','NEL.OL'];
+const THEME_COLORS = {NNE:'#f59e0b',LUNR:'#a78bfa',CRML:'#10b981',RGTI:'#3b82f6','ASML.AS':'#e11d48','NEL.OL':'#22c55e'};
+
+const CURATED_META = {
+  NNE:{ theme:'Portable Micro-Reactors', catalyst:'White House Space Nuclear Mandate issued Apr 14 2026 — orbital deployment targeted 2028. DOE GAIN voucher for KRONOS MMR. $577M cash after $400M raise. Reuters SMR 2026 platinum sponsor.', thesis:'Most non-obvious nuclear play: portable micro-reactors for military forward bases, remote industry, and space. White House executive mandate just issued — procurement timelines could accelerate before the market prices it in.', risk:'Pre-revenue. KRONOS construction permit not until mid-2027. Regulatory path long.', macro:'AI power demand + White House space nuclear mandate + off-grid energy needs for defence.' },
+  LUNR:{ theme:'Lunar Economy / NASA', catalyst:'$4.6B NASA Lunar Terrain Vehicle contract decision pending. $180M IM-5 lander contract won. 5-satellite lunar GPS network launching mid-2026. Backlog $943M. Revenue guidance $900M–$1B for 2026.', thesis:'Only commercial company with a proven lunar lander that has already landed on the Moon. NASA building a permanent lunar economy and Intuitive Machines is the prime contractor. $4.6B LTV award = 5× revenue event.', risk:'Government revenue is lumpy. CFO sold 24K shares Apr 2026. Ongoing operating losses.', macro:'Artemis programme accelerating. US-China lunar competition driving NASA budget. Commercial space economy inflecting.' },
+  CRML:{ theme:'Greenland Rare Earths', catalyst:"Trump's $12B Project Vault critical minerals reserve. Jan 2027 Pentagon ban on Chinese-sourced magnets. US-China trade war accelerating domestic sourcing.", thesis:'Controls Tanbreez — one of the largest non-Chinese rare earth deposits globally. Jumped 35% in single session on US-Greenland talks. A geopolitical asset, not just a mining stock.', risk:'Early stage. Greenland political dynamics. Long development timeline.', macro:'China controls 90% of rare earth magnet manufacturing. US defense mandate by 2027.' },
+  RGTI:{ theme:'Quantum Computing', catalyst:'108-qubit Cepheus-1-108Q just launched (+34% on debut). $8.4M C-DAC order for H2 2026. $5.8M AFRL quantum networking contract. 150+ qubit system targeting 99.7% fidelity by end 2026. 336-qubit Lyra processor in roadmap.', thesis:'Only pure-play quantum hardware company shipping real systems to real customers. $589M cash = 3–4 years runway. 336-qubit Lyra is the quantum advantage trigger the sector is waiting for.', risk:'FY2025 revenue down 56% YoY. Pre-scale. IBM and Google are formidable competitors.', macro:'White House National Quantum Initiative. US-China quantum supremacy race. DoD quantum networking contracts expanding.' },
+  'ASML.AS':{ theme:'AI Semiconductor Infrastructure', catalyst:"Q1 2026 orders €7.7B — 2× analyst consensus. US CHIPS Act + EU Chips Act combined €100B+ capex requires ASML EUV equipment. Trade war urgency driving TSMC/Samsung/Intel to front-load orders. Only supplier of EUV lithography machines globally.", thesis:"Most non-obvious AI play in Europe: ASML doesn't make chips — it makes the only machines that can make advanced AI chips. 30 years of R&D created a monopoly that cannot be replicated. Pulled back ~20% from ATH on tariff fears, but chips are largely exempt from tariff frameworks.", risk:'China export ban reduces addressable market ~15%. High valuation. TSMC capex slowdown would reduce order intake.', macro:'AI infrastructure buildout requires 2–3× advanced chip fabrication capacity. US CHIPS Act + EU Chips Act funding. US-China semiconductor decoupling entrenches ASML Western monopoly.' },
+  'NEL.OL':{ theme:'European Hydrogen Infrastructure', catalyst:"EU 10Mt renewable hydrogen target by 2030. German H2Global programme €2B. Norwegian government hydrogen offtake guarantee. US DOE loan programs for Nel's US electrolyzer manufacturing expansion. Q1 2026 results due May 2026.", thesis:"Norway's national hydrogen champion and Europe's largest electrolyzer manufacturer. The EU made hydrogen its strategic replacement for Russian gas. Trading at 2.25 NOK vs ATH of 27 NOK — pricing in worst case while EU mandates improve fundamentals. Lowest-cost electrolyzer technology at scale.", risk:'Capital-intensive. Hydrogen demand ramp slower than modelled. Chinese electrolyzer competitors lowering prices.', macro:'EU energy independence from Russia. European Green Deal hydrogen mandate. Industrial decarbonization (steel, shipping, aviation). Norwegian offshore wind-to-hydrogen export strategy.' },
+};
+
+const SEARCH_SCHEDULE = {
+  RGTI:     { event:'150-Qubit System Delivery', date:'2026-12-31', note:'Technical milestone — replace if delivery slips past Q4' },
+  NNE:      { event:'DOE KRONOS Permit Filing',  date:'2026-07-01', note:'Construction permit submission — thesis checkpoint' },
+  LUNR:     { event:'NASA LTV Contract Award',   date:'2026-06-15', note:'$4.6B award decision — binary catalyst; replace if lost' },
+  CRML:     { event:'Project Vault Tranche',     date:'2026-06-01', note:'First fund disbursement; re-score if delayed' },
+  'ASML.AS':{ event:'Q2 2026 Order Intake',      date:'2026-07-16', note:'Order momentum check — thesis breaks if <€5B' },
+  'NEL.OL': { event:'Q1 2026 Earnings',          date:'2026-05-15', note:'Revenue + electrolyzer backlog update — core thesis signal' },
+};
+
+let watchlistData  = {};   // ticker → api response
+let customData     = {};   // ticker → api response
+let activeTab      = 'watchlist';
+let selectedTicker = { watchlist: null, custom: null };
+let detailChartInstance = null;
+let modalTicker    = null;
+let selectedStopStyle = '20';
+
+// ── Persistence ───────────────────────────────────────────────────────────────
+const loadPositions    = () => { try { return JSON.parse(localStorage.getItem('sa_positions')||'{}'); } catch { return {}; } };
+const savePositions    = p  => localStorage.setItem('sa_positions', JSON.stringify(p));
+const loadCustomList   = () => { try { return JSON.parse(localStorage.getItem('sa_custom')||'[]'); } catch { return []; } };
+const saveCustomList   = l  => localStorage.setItem('sa_custom', JSON.stringify(l));
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function signalStyle(o) {
+  return ({'STRONG BUY':{bg:'rgba(0,255,136,.15)',color:'#00ff88',border:'rgba(0,255,136,.4)'},'BUY':{bg:'rgba(16,185,129,.15)',color:'#10b981',border:'rgba(16,185,129,.4)'},'HOLD':{bg:'rgba(245,158,11,.15)',color:'#f59e0b',border:'rgba(245,158,11,.4)'},'SELL':{bg:'rgba(239,68,68,.15)',color:'#ef4444',border:'rgba(239,68,68,.4)'},'STRONG SELL':{bg:'rgba(255,34,68,.15)',color:'#ff2244',border:'rgba(255,34,68,.4)'}})[o]||{bg:'rgba(245,158,11,.15)',color:'#f59e0b',border:'rgba(245,158,11,.4)'};
+}
+const fmtCap = n => !n?'N/A':n>=1e9?'$'+(n/1e9).toFixed(2)+'B':n>=1e6?'$'+(n/1e6).toFixed(1)+'M':'$'+n;
+const rsiColor = r => r<=35?'#00ff88':r<=50?'#10b981':r<=65?'#f59e0b':'#ef4444';
+const daysUntil = d => { const a=new Date(d),b=new Date(); a.setHours(0,0,0,0); b.setHours(0,0,0,0); return Math.round((a-b)/86400000); };
+const tickerColor = t => THEME_COLORS[t] || '#3b82f6';
+
+function nordnetBtn(s, size = 'sm') {
+  if (!s.nordnet_url) return '';
+  const verified = s.nordnet_verified;
+  const pad  = size === 'lg' ? 'px-4 py-2 text-sm' : 'px-2 py-1 text-xs';
+  const icon = verified
+    ? `<svg style="width:12px;height:12px;margin-right:4px;flex-shrink:0" viewBox="0 0 24 24" fill="currentColor"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+    : '';
+  const label = size === 'lg' ? 'Buy on Nordnet' : 'Nordnet';
+  return `<a href="${s.nordnet_url}" target="_blank" rel="noopener"
+    onclick="event.stopPropagation()"
+    class="${pad} rounded-lg font-semibold flex items-center"
+    style="background:rgba(0,157,224,.15);color:#009de0;border:1px solid rgba(0,157,224,.35);text-decoration:none;white-space:nowrap"
+    title="${verified ? 'Confirmed on Nordnet' : 'Opens Nordnet — verify availability'}"
+  >${icon}${label}${!verified ? ' ↗' : ''}</a>`;
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  activeTab = tab;
+  document.getElementById('tab-watchlist-content').style.display = tab==='watchlist' ? '' : 'none';
+  document.getElementById('tab-custom-content').style.display    = tab==='custom'    ? '' : 'none';
+  document.getElementById('tab-watchlist').className = 'tab-btn' + (tab==='watchlist'?' active':'');
+  document.getElementById('tab-custom').className    = 'tab-btn' + (tab==='custom'   ?' active':'');
+  // Re-render detail for the active tab's selection
+  const sel = selectedTicker[tab];
+  const data = tab==='watchlist' ? watchlistData : customData;
+  if (sel && data[sel]) renderDetail(data[sel], tab);
+  else document.getElementById('detail-panel').style.display = 'none';
+}
+
+// ── Position math ─────────────────────────────────────────────────────────────
+function computePosition(pos, price) {
+  const e = pos.entryPrice;
+  const pnlPct = (price-e)/e*100;
+  const pnlAbs = pos.shares ? (price-e)*pos.shares : null;
+  let stop;
+  if (pos.stopStyle==='trail') { const peak=pos.peakPrice||e; stop=peak*.75; }
+  else stop = e*(1-parseFloat(pos.stopStyle)/100);
+  const t1=e*1.35, t2=e*1.75, t3=e*2.25;
+  return { entry:e, pnlPct, pnlAbs, stop, t1, t2, t3,
+    stopBreached:price<=stop, t1Hit:price>=t1, t2Hit:price>=t2, t3Hit:price>=t3 };
+}
+
+function exitReason(s, pm) {
+  const sig = s.signal.overall;
+  if (pm.stopBreached) return { type:'STOP', msg:`Stop loss hit — entry $${pm.entry.toFixed(2)}, stop $${pm.stop.toFixed(2)}. Exit to protect capital.` };
+  if (pm.t3Hit && (sig==='SELL'||sig==='STRONG SELL')) return { type:'T3', msg:`+125% target reached and signal is ${sig}. Consider a full exit — the thesis may be priced in.` };
+  if (pm.t2Hit && (sig==='SELL'||sig==='STRONG SELL')) return { type:'T2', msg:`+75% target reached and signal is ${sig}. Strong case to sell the remaining position.` };
+  if (pm.t1Hit && sig==='STRONG SELL') return { type:'T1', msg:`+35% target reached with a strong sell signal. Consider selling half your position.` };
+  if ((sig==='SELL'||sig==='STRONG SELL') && pm.pnlPct>15) return { type:'LOCK', msg:`Signal is ${sig} while you're up ${pm.pnlPct.toFixed(1)}%. Consider selling to lock in the gain.` };
+  return null;
+}
+
+// ── Buy modal ─────────────────────────────────────────────────────────────────
+function openBuyModal(ticker) {
+  event.stopPropagation();
+  modalTicker = ticker;
+  const data = activeTab==='watchlist' ? watchlistData : customData;
+  const s = data[ticker];
+  document.getElementById('modal-title').textContent    = `Record Purchase — ${ticker}`;
+  document.getElementById('modal-subtitle').textContent = s?.name||'';
+  document.getElementById('modal-price').value  = s ? s.price.toFixed(2) : '';
+  document.getElementById('modal-date').value   = new Date().toISOString().split('T')[0];
+  document.getElementById('modal-shares').value = '';
+  selectedStopStyle = '20';
+  document.querySelectorAll('.stop-btn').forEach(b => styleStopBtn(b, b.dataset.val==='20'));
+  document.getElementById('buy-modal').style.display = 'flex';
+}
+function selectStop(btn) {
+  selectedStopStyle = btn.dataset.val;
+  document.querySelectorAll('.stop-btn').forEach(b => styleStopBtn(b, b===btn));
+}
+function styleStopBtn(b, active) {
+  b.style.background   = active ? 'rgba(59,130,246,.2)' : 'var(--bg)';
+  b.style.color        = active ? '#3b82f6' : 'var(--muted)';
+  b.style.borderColor  = active ? 'rgba(59,130,246,.4)' : 'var(--border)';
+}
+function closeBuyModal() { document.getElementById('buy-modal').style.display='none'; modalTicker=null; }
+function saveBought() {
+  if (!modalTicker) return;
+  const price  = parseFloat(document.getElementById('modal-price').value);
+  const date   = document.getElementById('modal-date').value;
+  const shares = parseInt(document.getElementById('modal-shares').value)||null;
+  if (!price||price<=0||!date) { alert('Please enter a valid price and date.'); return; }
+  const data = activeTab==='watchlist' ? watchlistData : customData;
+  const positions = loadPositions();
+  positions[modalTicker] = { entryPrice:price, entryDate:date, shares, stopStyle:selectedStopStyle, peakPrice:data[modalTicker]?.price||price };
+  savePositions(positions);
+  closeBuyModal();
+  rerenderActiveGrid();
+  updatePortfolioBar();
+  const sel = selectedTicker[activeTab];
+  if (sel===modalTicker) renderDetail(data[modalTicker], activeTab);
+}
+function clearPosition(ticker) {
+  event.stopPropagation();
+  const positions = loadPositions();
+  delete positions[ticker];
+  savePositions(positions);
+  rerenderActiveGrid();
+  updatePortfolioBar();
+  const data = activeTab==='watchlist' ? watchlistData : customData;
+  if (selectedTicker[activeTab]===ticker) renderDetail(data[ticker], activeTab);
+}
+
+// ── Custom ticker management ──────────────────────────────────────────────────
+// ── Ticker search autocomplete ────────────────────────────────────────────────
+let _suggestTimeout = null;
+let _suggestions    = [];
+let _suggestionIdx  = -1;
+
+function onSearchInput(e) {
+  document.getElementById('search-error').textContent = '';
+  clearTimeout(_suggestTimeout);
+  const q = e.target.value.trim();
+  if (q.length < 1) { hideSuggestions(); return; }
+  _suggestTimeout = setTimeout(() => fetchSuggestions(q), 220);
+}
+
+async function fetchSuggestions(q) {
+  try {
+    const res  = await fetch(`${API}/api/search?q=${encodeURIComponent(q)}`);
+    _suggestions = await res.json();
+    _suggestionIdx = -1;
+    renderSuggestions();
+  } catch { hideSuggestions(); }
+}
+
+function renderSuggestions() {
+  const box = document.getElementById('suggestions-dropdown');
+  if (!_suggestions.length) { hideSuggestions(); return; }
+  box.innerHTML = _suggestions.map((s, i) => `
+    <div class="suggestion-item" data-idx="${i}" onmousedown="pickSuggestion(${i})">
+      <span class="suggestion-ticker">${s.symbol}</span>
+      <span class="suggestion-name">${s.name}</span>
+      <span class="suggestion-exchange">${s.exchange}</span>
+    </div>`).join('');
+  box.style.display = 'block';
+}
+
+function pickSuggestion(idx) {
+  const s = _suggestions[idx];
+  if (!s) return;
+  document.getElementById('custom-search-input').value = s.symbol;
+  hideSuggestions();
+  addCustomTicker();
+}
+
+function hideSuggestions() {
+  document.getElementById('suggestions-dropdown').style.display = 'none';
+  _suggestions = []; _suggestionIdx = -1;
+}
+
+function handleSearchKey(e) {
+  const box = document.getElementById('suggestions-dropdown');
+  const items = box.querySelectorAll('.suggestion-item');
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    _suggestionIdx = Math.min(_suggestionIdx + 1, items.length - 1);
+    items.forEach((el, i) => el.classList.toggle('active', i === _suggestionIdx));
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    _suggestionIdx = Math.max(_suggestionIdx - 1, -1);
+    items.forEach((el, i) => el.classList.toggle('active', i === _suggestionIdx));
+  } else if (e.key === 'Enter') {
+    if (_suggestionIdx >= 0 && _suggestions[_suggestionIdx]) {
+      e.preventDefault();
+      pickSuggestion(_suggestionIdx);
+    } else {
+      hideSuggestions();
+      addCustomTicker();
+    }
+  } else if (e.key === 'Escape') {
+    hideSuggestions();
+  }
+}
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.search-input-wrap')) hideSuggestions();
+});
+
+async function addCustomTicker() {
+  const inp  = document.getElementById('custom-search-input');
+  const btn  = document.getElementById('search-add-btn');
+  const errEl= document.getElementById('search-error');
+  const raw  = inp.value.trim().toUpperCase();
+  if (!raw) return;
+
+  const list = loadCustomList();
+  if (list.includes(raw)) { errEl.textContent=`${raw} is already on your dashboard.`; return; }
+
+  btn.disabled = true; btn.textContent = 'Adding...'; errEl.textContent='';
+  try {
+    const res  = await fetch(`${API}/api/stock/${raw}`);
+    const data = await res.json();
+    if (data.error || !data.price) { errEl.textContent=`Ticker "${raw}" not found. Check the symbol and try again.`; return; }
+    if (!data.nordnet_url) {
+      errEl.style.color='#f59e0b';
+      errEl.textContent=`${raw} added — but it may be on an exchange Nordnet doesn't support (e.g. OTC). Verify before placing an order.`;
+    }
+    list.push(raw);
+    saveCustomList(list);
+    customData[raw] = data;
+    inp.value='';
+    renderCustomGrid();
+    updateCustomCount();
+  } catch(e) {
+    errEl.textContent = 'Could not reach the data server. Is the backend running?';
+  } finally {
+    btn.disabled=false; btn.textContent='Add to Dashboard';
+  }
+}
+
+function removeCustomTicker(ticker) {
+  event.stopPropagation();
+  const list = loadCustomList().filter(t=>t!==ticker);
+  saveCustomList(list);
+  delete customData[ticker];
+  if (selectedTicker.custom===ticker) {
+    selectedTicker.custom=null;
+    document.getElementById('detail-panel').style.display='none';
+  }
+  renderCustomGrid();
+  updateCustomCount();
+  updatePortfolioBar();
+}
+
+function updateCustomCount() {
+  const n = loadCustomList().length;
+  const el = document.getElementById('custom-count');
+  el.textContent = n;
+  el.style.background = n>0 ? 'rgba(59,130,246,.2)' : 'var(--border)';
+  el.style.color      = n>0 ? '#3b82f6' : 'var(--muted)';
+}
+
+// ── Sparkline ─────────────────────────────────────────────────────────────────
+function miniSparkline(id, chartData, color) {
+  const ctx=document.getElementById(id); if(!ctx)return;
+  new Chart(ctx,{type:'line',data:{labels:chartData.map(d=>d.date),datasets:[{data:chartData.map(d=>d.close),borderColor:color,borderWidth:1.5,pointRadius:0,fill:true,backgroundColor:c=>{const g=c.chart.ctx.createLinearGradient(0,0,0,80);g.addColorStop(0,color+'40');g.addColorStop(1,color+'00');return g;},tension:.3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{enabled:false}},scales:{x:{display:false},y:{display:false}},animation:false,interaction:{mode:'none'}}});
+}
+
+// ── Card renderer (shared) ────────────────────────────────────────────────────
+function buildCard(s, tab, isCustom) {
+  const color    = tickerColor(s.ticker);
+  const sig      = s.signal;
+  const ss       = signalStyle(sig.overall);
+  const chgColor = s.change_pct>=0 ? '#10b981' : '#ef4444';
+  const positions= loadPositions();
+  const pos      = positions[s.ticker];
+  const isSel    = selectedTicker[tab]===s.ticker;
+
+  let posBadge='', exitBanner='';
+  if (pos) {
+    const pm = computePosition(pos, s.price);
+    const ex = exitReason(s, pm);
+    const pc = pm.pnlPct>=0?'#10b981':'#ef4444';
+    const ps = pm.pnlPct>=0?'+':'';
+    posBadge = `<div class="flex items-center justify-between mt-2 px-2 py-1.5 rounded-lg" style="background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2)">
+      <div class="flex items-center gap-2"><span class="text-xs font-semibold" style="color:#10b981">HOLDING</span><span class="text-xs" style="color:var(--muted)">@ $${pm.entry.toFixed(2)}</span></div>
+      <span class="text-xs font-bold" style="color:${pc}">${ps}${pm.pnlPct.toFixed(1)}%${pm.pnlAbs!==null?' ($'+(pm.pnlAbs>=0?'+':'')+pm.pnlAbs.toFixed(0)+')':''}</span>
+    </div>`;
+    if (ex) exitBanner=`<div class="mt-2 px-2 py-1.5 rounded-lg text-xs font-bold" style="background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#ef4444">EXIT ALERT: ${ex.type}</div>`;
+  }
+
+  const card = document.createElement('div');
+  card.className = `card stock-card p-4 ${isSel?'selected':''} ${pos?'holding':''}`;
+  card.id = `card-${tab}-${s.ticker}`;
+  card.onclick = () => selectStock(s.ticker, tab);
+
+  const meta = CURATED_META[s.ticker];
+  const themeBadge = meta?.theme||s.theme||s.sector||'';
+  const blurb = meta?.catalyst ? meta.catalyst.substring(0,110)+'…' : (s.name||'');
+
+  card.innerHTML = `
+    <div class="flex items-start justify-between mb-3">
+      <div>
+        <div class="flex items-center gap-2 mb-1">
+          <span class="font-bold text-lg">${s.ticker}</span>
+          ${themeBadge?`<span class="badge" style="background:${color}22;color:${color};border:1px solid ${color}44">${themeBadge}</span>`:''}
+        </div>
+        <div class="text-xs" style="color:var(--muted)">${s.name||''}</div>
+      </div>
+      <div class="text-right">
+        <div class="text-xl font-bold">$${s.price.toFixed(2)}</div>
+        <div class="text-sm font-semibold" style="color:${chgColor}">${s.change_pct>=0?'▲':'▼'} ${Math.abs(s.change_pct)}%</div>
+      </div>
+    </div>
+    <div style="height:70px;position:relative" class="mb-3"><canvas id="spark-${tab}-${s.ticker}"></canvas></div>
+    <div class="flex items-center justify-between mb-2">
+      <span class="signal-pill" style="background:${ss.bg};color:${ss.color};border:1px solid ${ss.border}">${sig.overall}</span>
+      <div class="flex items-center gap-1">
+        ${nordnetBtn(s)}
+        ${pos
+          ? `<button onclick="clearPosition('${s.ticker}')" class="btn-danger">Clear</button>`
+          : `<button onclick="openBuyModal('${s.ticker}')" class="px-2 py-1 rounded-lg text-xs font-semibold" style="background:rgba(16,185,129,.15);color:#10b981;border:1px solid rgba(16,185,129,.3)">+ Log buy</button>`
+        }
+        ${isCustom?`<button onclick="removeCustomTicker('${s.ticker}')" class="btn-danger" title="Remove">✕</button>`:''}
+      </div>
+    </div>
+    <div class="grid grid-cols-3 gap-2 mb-2">
+      <div class="text-center p-2 rounded-lg" style="background:var(--bg)"><div class="text-xs mb-1" style="color:var(--muted)">RSI</div><div class="font-semibold text-sm" style="color:${rsiColor(s.rsi)}">${s.rsi}</div></div>
+      <div class="text-center p-2 rounded-lg" style="background:var(--bg)"><div class="text-xs mb-1" style="color:var(--muted)">MACD</div><div class="font-semibold text-sm" style="color:${s.macd_hist>=0?'#10b981':'#ef4444'}">${s.macd_hist>=0?'+':''}${s.macd_hist.toFixed(3)}</div></div>
+      <div class="text-center p-2 rounded-lg" style="background:var(--bg)"><div class="text-xs mb-1" style="color:var(--muted)">SMA50</div><div class="font-semibold text-sm" style="color:${s.price>s.sma50?'#10b981':'#ef4444'}">$${s.sma50>0?s.sma50.toFixed(2):'N/A'}</div></div>
+    </div>
+    <p class="text-xs leading-relaxed" style="color:var(--muted)">${blurb}</p>
+    ${posBadge}${exitBanner}`;
+  return card;
+}
+
+function renderWatchlistGrid() {
+  const grid = document.getElementById('watchlist-grid');
+  grid.innerHTML='';
+  const stocks = WATCHLIST_TICKERS.map(t=>watchlistData[t]).filter(Boolean);
+  if (!stocks.length) { grid.innerHTML='<div class="card p-6 text-center" style="grid-column:1/-1;color:var(--muted)">Loading...</div>'; return; }
+  stocks.forEach(s => {
+    const card = buildCard(s, 'watchlist', false);
+    grid.appendChild(card);
+    requestAnimationFrame(()=>miniSparkline(`spark-watchlist-${s.ticker}`, s.chart_data, tickerColor(s.ticker)));
+  });
+}
+
+function renderCustomGrid() {
+  const grid  = document.getElementById('custom-grid');
+  const empty = document.getElementById('custom-empty');
+  const list  = loadCustomList();
+  grid.innerHTML='';
+  if (!list.length) { grid.appendChild(empty); return; }
+  list.forEach(ticker => {
+    const s = customData[ticker]; if(!s)return;
+    const card = buildCard(s, 'custom', true);
+    grid.appendChild(card);
+    requestAnimationFrame(()=>miniSparkline(`spark-custom-${ticker}`, s.chart_data, tickerColor(ticker)));
+  });
+}
+
+function rerenderActiveGrid() {
+  if (activeTab==='watchlist') renderWatchlistGrid();
+  else renderCustomGrid();
+}
+
+// ── Select ────────────────────────────────────────────────────────────────────
+function selectStock(ticker, tab) {
+  selectedTicker[tab] = ticker;
+  document.querySelectorAll('.stock-card').forEach(c=>c.classList.remove('selected'));
+  const card = document.getElementById(`card-${tab}-${ticker}`);
+  if (card) card.classList.add('selected');
+  const data = tab==='watchlist' ? watchlistData : customData;
+  renderDetail(data[ticker], tab);
+  document.getElementById('detail-panel').scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+// ── Detail panel ──────────────────────────────────────────────────────────────
+function renderDetail(s, tab) {
+  if (!s||s.error) return;
+  const panel   = document.getElementById('detail-panel');
+  const color   = tickerColor(s.ticker);
+  const sig     = s.signal;
+  const ss      = signalStyle(sig.overall);
+  const positions = loadPositions();
+  const pos     = positions[s.ticker];
+  const meta    = CURATED_META[s.ticker];
+
+  panel.style.display = 'block';
+  panel.className = 'card p-6 slide-in';
+
+  const signalRows = sig.signals.map(sg=>{
+    const sc=sg.type==='BUY'?'#10b981':'#ef4444';
+    return `<div class="flex items-center gap-3 py-2" style="border-bottom:1px solid var(--border)">
+      <span class="font-bold text-sm" style="color:${sc};min-width:60px">${sg.type==='BUY'?'↑':'↓'} ${sg.type}</span>
+      <span class="text-sm" style="color:var(--muted)">${sg.reason}</span>
+    </div>`;
+  }).join('');
+
+  const advice = getAdvice(s);
+
+  // Position block
+  let posBlock = '';
+  if (pos) {
+    const pm = computePosition(pos, s.price);
+    const ex = exitReason(s, pm);
+    const pc = pm.pnlPct>=0?'#10b981':'#ef4444';
+    const ps = pm.pnlPct>=0?'+':'';
+    const dayHeld = Math.round((new Date()-new Date(pos.entryDate))/86400000);
+    const stopLabel = pos.stopStyle==='trail'?'25% Trailing':`−${pos.stopStyle}% Fixed`;
+    posBlock = `
+    <div class="mb-6 p-5 rounded-xl" style="background:rgba(16,185,129,.06);border:1px solid rgba(16,185,129,.25)">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="font-bold text-base" style="color:#10b981">My Position</h3>
+        <button onclick="clearPosition('${s.ticker}')" class="btn-danger">Clear Position</button>
+      </div>
+      ${ex?`<div class="mb-4 ${ex.type==='STOP'?'exit-alert':'target-hit'}"><div class="font-bold mb-1" style="color:${ex.type==='STOP'?'#ef4444':'#10b981'}">${ex.type==='STOP'?'STOP LOSS HIT':'PROFIT TARGET HIT'}</div><p class="text-sm">${ex.msg}</p></div>`:''}
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <div class="p-3 rounded-lg" style="background:var(--card)">
+          <div class="text-xs mb-1" style="color:var(--muted)">Purchase Price</div>
+          <div class="font-bold text-lg">$${pm.entry.toFixed(2)}</div>
+          <div class="text-xs mt-1" style="color:var(--muted)">${pos.entryDate} · ${dayHeld}d held</div>
+        </div>
+        <div class="p-3 rounded-lg" style="background:var(--card)">
+          <div class="text-xs mb-1" style="color:var(--muted)">Unrealised P&amp;L</div>
+          <div class="font-bold text-lg" style="color:${pc}">${ps}${pm.pnlPct.toFixed(2)}%</div>
+          ${pm.pnlAbs!==null?`<div class="text-xs mt-1" style="color:${pc}">${ps}$${Math.abs(pm.pnlAbs).toFixed(2)} · ${pos.shares} shares</div>`:''}
+        </div>
+        <div class="p-3 rounded-lg" style="background:var(--card)">
+          <div class="text-xs mb-1" style="color:var(--muted)">Stop Loss (${stopLabel})</div>
+          <div class="font-bold text-lg" style="color:#ef4444">$${pm.stop.toFixed(2)}</div>
+          <div class="text-xs mt-1" style="color:var(--muted)">${((pm.stop-s.price)/s.price*100).toFixed(1)}% from now</div>
+        </div>
+        <div class="p-3 rounded-lg" style="background:var(--card)">
+          <div class="text-xs mb-1" style="color:var(--muted)">Next Target</div>
+          <div class="font-bold text-lg" style="color:${pm.t1Hit?'#10b981':'var(--text)'}">
+            $${pm.t3Hit?'✓ All hit':pm.t2Hit?pm.t3.toFixed(2):pm.t1Hit?pm.t2.toFixed(2):pm.t1.toFixed(2)}
+          </div>
+          <div class="text-xs mt-1" style="color:var(--muted)">${pm.t3Hit?'+125% (all hit)':pm.t2Hit?'T3 +125% remaining':pm.t1Hit?'T2 +75% remaining':'T1 +35%'}</div>
+        </div>
+      </div>
+      <div class="grid grid-cols-3 gap-2 text-xs">
+        ${[{label:'T1 +35%',val:pm.t1,hit:pm.t1Hit},{label:'T2 +75%',val:pm.t2,hit:pm.t2Hit},{label:'T3 +125%',val:pm.t3,hit:pm.t3Hit}].map(t=>`
+          <div class="p-2 rounded-lg flex items-center justify-between" style="background:var(--card);${t.hit?'border:1px solid rgba(16,185,129,.4)':''}">
+            <span style="color:var(--muted)">${t.label} — $${t.val.toFixed(2)}</span>
+            <span style="color:${t.hit?'#10b981':'var(--muted)'}">${t.hit?'✓ HIT':'pending'}</span>
+          </div>`).join('')}
+      </div>
+    </div>`;
+  }
+
+  const hasMeta = !!(meta?.thesis);
+
+  document.getElementById('detail-content').innerHTML = `
+    <div class="flex flex-wrap items-start justify-between gap-4 mb-5">
+      <div>
+        <div class="flex items-center gap-3 mb-1">
+          <h2 class="text-2xl font-bold">${s.ticker}</h2>
+          ${meta?.theme||s.theme?`<span class="badge text-sm px-3 py-1" style="background:${color}22;color:${color};border:1px solid ${color}44">${meta?.theme||s.theme}</span>`:''}
+          <span class="signal-pill" style="background:${ss.bg};color:${ss.color};border:1px solid ${ss.border};font-size:13px">${sig.overall}</span>
+        </div>
+        <p class="text-base" style="color:var(--muted)">${s.name||''}</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <div class="text-right">
+          <div class="text-3xl font-bold">$${s.price.toFixed(2)}</div>
+          <div class="text-lg" style="color:${s.change_pct>=0?'#10b981':'#ef4444'}">${s.change_pct>=0?'+':''}${s.change_pct}% today</div>
+          <div class="text-xs mt-1" style="color:var(--muted)">Mkt Cap: ${fmtCap(s.market_cap)}</div>
+        </div>
+        <div class="flex flex-col gap-2 items-end">
+          ${nordnetBtn(s, 'lg')}
+          ${!pos?`<button onclick="openBuyModal('${s.ticker}')" class="btn-primary" style="white-space:nowrap;font-size:13px;padding:8px 16px">+ Log purchase</button>`:''}
+        </div>
+      </div>
+    </div>
+
+    ${posBlock}
+
+    <div class="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-6">
+      <div class="xl:col-span-2">
+        <div class="detail-chart"><canvas id="detail-chart-canvas"></canvas></div>
+        <div class="flex flex-wrap gap-4 mt-3 text-xs" style="color:var(--muted)">
+          <span><span class="inline-block w-5 h-0.5 mr-1" style="background:${color};vertical-align:middle"></span>Price</span>
+          <span><span class="inline-block w-5 h-0.5 mr-1" style="background:#3b82f6;vertical-align:middle;opacity:.6"></span>SMA 20</span>
+          <span><span class="inline-block w-5 h-0.5 mr-1" style="background:#f59e0b;vertical-align:middle;opacity:.6"></span>SMA 50</span>
+          <span><span class="inline-block w-5 border-t border-dashed mr-1" style="border-color:#4b5563;vertical-align:middle"></span>Bollinger</span>
+          ${pos?`<span><span class="inline-block w-5 border-t-2 mr-1" style="border-color:#10b981;border-style:dashed;vertical-align:middle"></span>Purchase price</span>
+          <span><span class="inline-block w-5 border-t-2 mr-1" style="border-color:#ef4444;border-style:dashed;vertical-align:middle"></span>Stop loss</span>
+          <span><span class="inline-block w-5 border-t-2 mr-1" style="border-color:#f59e0b;border-style:dashed;vertical-align:middle"></span>Targets</span>`:''}
+        </div>
+      </div>
+      <div class="p-4 rounded-xl" style="background:var(--bg)">
+        <h3 class="text-sm font-semibold mb-3" style="color:var(--muted)">TECHNICAL INDICATORS</h3>
+        <div class="space-y-3">
+          <div>
+            <div class="flex justify-between text-sm mb-1"><span>RSI (14)</span><span style="color:${rsiColor(s.rsi)};font-weight:600">${s.rsi}</span></div>
+            <div class="indicator-bar"><div class="indicator-fill" style="width:${s.rsi}%;background:${rsiColor(s.rsi)}"></div></div>
+            <div class="flex justify-between text-xs mt-1" style="color:var(--muted)"><span>Oversold</span><span>Neutral</span><span>Overbought</span></div>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div class="p-3 rounded-lg" style="background:var(--card)"><div class="text-xs mb-1" style="color:var(--muted)">MACD</div><div class="font-bold" style="color:${s.macd>=0?'#10b981':'#ef4444'}">${s.macd>=0?'+':''}${s.macd.toFixed(4)}</div></div>
+            <div class="p-3 rounded-lg" style="background:var(--card)"><div class="text-xs mb-1" style="color:var(--muted)">Histogram</div><div class="font-bold" style="color:${s.macd_hist>=0?'#10b981':'#ef4444'}">${s.macd_hist>=0?'+':''}${s.macd_hist.toFixed(4)}</div></div>
+            <div class="p-3 rounded-lg" style="background:var(--card)"><div class="text-xs mb-1" style="color:var(--muted)">SMA 20</div><div class="font-bold">$${s.sma20>0?s.sma20.toFixed(2):'N/A'}</div></div>
+            <div class="p-3 rounded-lg" style="background:var(--card)"><div class="text-xs mb-1" style="color:var(--muted)">SMA 50</div><div class="font-bold" style="color:${s.price>s.sma50?'#10b981':'#ef4444'}">$${s.sma50>0?s.sma50.toFixed(2):'N/A'}</div></div>
+          </div>
+          <div><div class="text-xs mb-2" style="color:var(--muted)">BOLLINGER BANDS</div>
+            <div class="space-y-1 text-sm">
+              <div class="flex justify-between"><span style="color:var(--muted)">Upper</span><span style="color:#ef4444">$${s.bb_upper.toFixed(2)}</span></div>
+              <div class="flex justify-between"><span style="color:var(--muted)">Mid</span><span>$${s.bb_mid.toFixed(2)}</span></div>
+              <div class="flex justify-between"><span style="color:var(--muted)">Lower</span><span style="color:#10b981">$${s.bb_lower.toFixed(2)}</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
+      <div class="p-4 rounded-xl" style="background:var(--bg)">
+        <h3 class="text-sm font-semibold mb-3" style="color:var(--muted)">SIGNAL BREAKDOWN</h3>
+        ${signalRows}
+      </div>
+      <div class="p-4 rounded-xl" style="background:var(--bg)">
+        <h3 class="text-sm font-semibold mb-3" style="color:var(--muted)">ENTRY / EXIT PLAYBOOK</h3>
+        <div class="p-4 rounded-xl mb-3" style="background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2)">
+          <div class="font-bold mb-1 text-sm" style="color:#10b981">BUY WHEN</div>
+          <p class="text-sm">${advice.buy}</p>
+        </div>
+        <div class="p-4 rounded-xl" style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2)">
+          <div class="font-bold mb-1 text-sm" style="color:#ef4444">SELL WHEN</div>
+          <p class="text-sm">${advice.sell}</p>
+        </div>
+      </div>
+    </div>
+
+    ${hasMeta?`<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="p-4 rounded-xl" style="background:var(--bg)"><div class="text-xs font-semibold mb-2" style="color:${color}">INVESTMENT THESIS</div><p class="text-sm leading-relaxed" style="color:var(--muted)">${meta.thesis}</p></div>
+      <div class="p-4 rounded-xl" style="background:var(--bg)"><div class="text-xs font-semibold mb-2" style="color:var(--yellow)">NEAR-TERM CATALYSTS</div><p class="text-sm leading-relaxed" style="color:var(--muted)">${meta.catalyst}</p></div>
+      <div class="p-4 rounded-xl" style="background:var(--bg)"><div class="text-xs font-semibold mb-2" style="color:var(--red)">RISKS</div><p class="text-sm leading-relaxed mb-3" style="color:var(--muted)">${meta.risk}</p><div class="text-xs font-semibold mb-2" style="color:var(--purple)">MACRO TAILWIND</div><p class="text-sm leading-relaxed" style="color:var(--muted)">${meta.macro}</p></div>
+    </div>`:''}
+  `;
+
+  renderDetailChart(s, color, pos ? computePosition(pos, s.price) : null);
+}
+
+// ── Detail chart ──────────────────────────────────────────────────────────────
+function renderDetailChart(s, color, pm) {
+  if (detailChartInstance) { detailChartInstance.destroy(); detailChartInstance=null; }
+  const ctx = document.getElementById('detail-chart-canvas');
+  if (!ctx||!s.chart_data?.length) return;
+  const labels = s.chart_data.map(d=>d.date);
+  const closes = s.chart_data.map(d=>d.close);
+  const n = closes.length;
+  const sma = p => closes.map((_,i)=>i<p-1?null:closes.slice(i-p+1,i+1).reduce((a,b)=>a+b,0)/p);
+  const bb  = m => closes.map((_,i)=>{ if(i<19)return null; const sl=closes.slice(i-19,i+1),mean=sl.reduce((a,b)=>a+b,0)/20,std=Math.sqrt(sl.map(v=>(v-mean)**2).reduce((a,b)=>a+b,0)/20); return mean+m*std; });
+  const flat= v=>Array(n).fill(v);
+
+  const datasets = [
+    {label:'Price',   data:closes,  borderColor:color,borderWidth:2.5,pointRadius:0,fill:true,backgroundColor:c=>{const g=c.chart.ctx.createLinearGradient(0,0,0,300);g.addColorStop(0,color+'30');g.addColorStop(1,color+'00');return g;},tension:.3,order:1},
+    {label:'SMA 20',  data:sma(20), borderColor:'rgba(59,130,246,.7)',borderWidth:1.5,pointRadius:0,fill:false,tension:.3,order:2},
+    {label:'SMA 50',  data:sma(50), borderColor:'rgba(245,158,11,.7)',borderWidth:1.5,pointRadius:0,fill:false,tension:.3,order:3},
+    {label:'BB Upper',data:bb(2),   borderColor:'rgba(75,85,99,.5)',borderWidth:1,borderDash:[4,4],pointRadius:0,fill:false,tension:.3,order:4},
+    {label:'BB Lower',data:bb(-2),  borderColor:'rgba(75,85,99,.5)',borderWidth:1,borderDash:[4,4],pointRadius:0,fill:'-1',backgroundColor:'rgba(75,85,99,.04)',tension:.3,order:5},
+  ];
+  if (pm) {
+    datasets.push({label:'Purchase price',data:flat(pm.entry), borderColor:'rgba(16,185,129,.85)',borderWidth:1.5,borderDash:[6,3],pointRadius:0,fill:false,order:6});
+    datasets.push({label:'Stop loss',     data:flat(pm.stop),  borderColor:'rgba(239,68,68,.85)', borderWidth:1.5,borderDash:[6,3],pointRadius:0,fill:false,order:7});
+    datasets.push({label:'T1 +35%', data:flat(pm.t1), borderColor:'rgba(245,158,11,.5)',borderWidth:1,borderDash:[3,3],pointRadius:0,fill:false,order:8});
+    datasets.push({label:'T2 +75%', data:flat(pm.t2), borderColor:'rgba(245,158,11,.75)',borderWidth:1,borderDash:[3,3],pointRadius:0,fill:false,order:9});
+    datasets.push({label:'T3 +125%',data:flat(pm.t3), borderColor:'rgba(245,158,11,1)',  borderWidth:1,borderDash:[3,3],pointRadius:0,fill:false,order:10});
+  }
+
+  detailChartInstance = new Chart(ctx,{type:'line',data:{labels,datasets},options:{
+    responsive:true,maintainAspectRatio:false,
+    interaction:{intersect:false,mode:'index'},
+    plugins:{legend:{display:false},tooltip:{backgroundColor:'#1f2937',borderColor:'#374151',borderWidth:1,titleColor:'#9ca3af',bodyColor:'#e5e7eb',callbacks:{label:c=>c.parsed.y===null?null:` ${c.dataset.label}: $${c.parsed.y.toFixed(2)}`}}},
+    scales:{x:{grid:{color:'rgba(31,41,55,.8)'},ticks:{color:'#6b7280',maxTicksLimit:8,font:{size:11}}},y:{grid:{color:'rgba(31,41,55,.8)'},ticks:{color:'#6b7280',font:{size:11},callback:v=>'$'+v.toFixed(2)}}},
+  }});
+}
+
+// ── Advice (stock buy/sell only) ──────────────────────────────────────────────
+function getAdvice(s) {
+  const curated = {
+    NNE: { buy:'Currently showing a BUY signal. RSI in the healthy 55–65 zone with positive MACD momentum. Add on any pullback to the $22–24 range. The White House Space Nuclear Mandate was only issued Apr 14 — the market has not fully priced it in yet.',
+           sell:'RSI above 75 and price above the upper Bollinger Band. Sell half at 2× your purchase price. Sell the rest if DOE KRONOS permit is denied or significantly delayed beyond mid-2027.' },
+    LUNR:{ buy:'Currently showing a BUY signal. RSI at 61, MACD positive. Best entry on any dip toward the $24–26 range. The $4.6B NASA LTV contract decision is the key binary — accumulate before the award is announced.',
+           sell:'Sell half immediately if NASA LTV contract goes to a competitor. RSI above 75 and price extended above upper Bollinger Band = take profits. Exit fully if two consecutive quarters miss revenue guidance.' },
+    CRML:{ buy:'Any pullback toward $8–9. Strongest buy trigger: Project Vault fund disbursement announcement, new US-Greenland diplomatic developments, or DoD non-Chinese sourcing mandate news.',
+           sell:'Up 30–40% from your purchase price. Exit if US-China trade tensions de-escalate materially. Full exit if the Jan 2027 Pentagon mandate is delayed or softened.' },
+    RGTI:{ buy:'Currently a BUY signal. RSI at 63 with positive MACD momentum. Add on any pullback toward $14–15. The 108-qubit system launch is still being digested — the C-DAC delivery in H2 2026 is the next re-rating event.',
+           sell:'RSI above 75 and price above the upper Bollinger Band. Sell half if the 150-qubit system delivery slips past Q4 2026. Exit entirely if a competitor announces a clear quantum advantage milestone first.' },
+    'ASML.AS':{ buy:'Currently a BUY signal. RSI at 61, MACD positive. Best entry on any dip toward €650–700 range. Trade war fear has compressed the valuation — accumulate before tariff clarity returns. The Q1 order beat (€7.7B vs €4B consensus) is the clearest signal the AI capex cycle is intact.',
+                sell:'RSI above 75 and price above upper Bollinger Band. Reduce on any confirmation that TSMC or Samsung are cutting 2026 capex guidance. Exit entirely if US expands chip-making equipment export controls to allied nations.' },
+    'NEL.OL': { buy:'Currently a BUY signal. RSI at 54, MACD positive. Best entry on any pullback toward 2.00–2.10 NOK. Q1 2026 earnings in May is the catalyst — any upgrade to electrolyzer backlog guidance is a re-rating event.',
+                sell:'RSI above 70 or price above upper Bollinger Band. Exit if EU delays or softens the 10Mt renewable hydrogen mandate. Reduce if a major Chinese electrolyzer contract is lost to a Chinese competitor on price alone.' },
+  };
+  if (curated[s.ticker]) return curated[s.ticker];
+  // Generic signal-based advice for custom tickers
+  const sig = s.signal.overall;
+  const buyRSI = s.rsi < 40 ? `RSI is at ${s.rsi} (oversold) — a technical buy setup. ` : s.rsi < 50 ? `RSI at ${s.rsi} — below midpoint, modest buying pressure. ` : '';
+  const macdBuy = s.macd_hist > 0 ? 'MACD histogram is positive — bullish momentum. ' : '';
+  const bbBuy = s.price < s.bb_lower ? `Price is below the lower Bollinger Band ($${s.bb_lower.toFixed(2)}) — mean reversion setup. ` : '';
+  const smaStatus = s.sma50 > 0 ? (s.price > s.sma50 ? `Price is above the 50-day MA ($${s.sma50.toFixed(2)}) — uptrend intact. ` : `Price is below the 50-day MA ($${s.sma50.toFixed(2)}) — wait for reclaim before adding. `) : '';
+  return {
+    buy: (buyRSI||macdBuy||bbBuy||'Wait for RSI below 45 and a MACD bullish crossover before entering. ') + smaStatus,
+    sell:`RSI above 70 and price above the upper Bollinger Band ($${s.bb_upper.toFixed(2)}). Honour your stop loss — exit if price falls to your set stop. Sell if the MACD histogram turns negative while you are already in profit.`,
+  };
+}
+
+// ── Portfolio bar ─────────────────────────────────────────────────────────────
+function updatePortfolioBar() {
+  const positions = loadPositions();
+  const bar = document.getElementById('portfolio-bar');
+  const tickers = Object.keys(positions);
+  if (!tickers.length) { bar.style.display='none'; return; }
+  let totalPct=0, count=0, exits=0;
+  tickers.forEach(t => {
+    const s = watchlistData[t]||customData[t]; if(!s)return;
+    const pm = computePosition(positions[t], s.price);
+    totalPct+=pm.pnlPct; count++; if(exitReason(s,pm))exits++;
+  });
+  const avg=count?(totalPct/count):0;
+  bar.style.display='flex';
+  bar.innerHTML=`
+    <span class="text-xs" style="color:var(--muted)">Holdings (${count})</span>
+    <span class="font-bold text-sm" style="color:${avg>=0?'#10b981':'#ef4444'}">${avg>=0?'+':''}${avg.toFixed(1)}% avg</span>
+    ${exits?`<span class="badge" style="background:rgba(239,68,68,.2);color:#ef4444;border:1px solid rgba(239,68,68,.3)">${exits} EXIT ALERT${exits>1?'S':''}</span>`:''}
+  `;
+}
+
+// ── Ticker tape ───────────────────────────────────────────────────────────────
+function updateTickerTape() {
+  const all = [...Object.values(watchlistData), ...Object.values(customData)].filter(s=>!s.error);
+  if (!all.length) return;
+  const items = all.map(s=>{
+    const c=s.change_pct>=0?'#10b981':'#ef4444';
+    return `<span style="margin:0 28px;font-size:13px;font-weight:600"><span style="color:#e5e7eb">${s.ticker}</span><span style="color:#9ca3af;margin:0 6px">$${s.price.toFixed(2)}</span><span style="color:${c}">${s.change_pct>=0?'▲':'▼'} ${Math.abs(s.change_pct)}%</span></span>`;
+  });
+  document.getElementById('ticker-tape-inner').innerHTML=items.join('')+items.join('');
+  document.getElementById('ticker-tape-wrap').style.display='block';
+}
+
+// ── Search schedule ───────────────────────────────────────────────────────────
+function renderSearchSchedule() {
+  const el=document.getElementById('search-schedule-items'); if(!el)return;
+  el.innerHTML='';
+  Object.entries(SEARCH_SCHEDULE).forEach(([ticker,info])=>{
+    const days=daysUntil(info.date);
+    const urgent=days<=7, overdue=days<0;
+    const color=overdue?'#ef4444':urgent?'#f59e0b':THEME_COLORS[ticker]||'#6b7280';
+    const label=overdue?`${Math.abs(days)}d overdue`:days===0?'TODAY':`${days}d`;
+    el.innerHTML+=`<div class="flex items-center gap-2 px-3 py-2 rounded-lg" style="background:var(--bg);border:1px solid ${color}33">
+      <span class="font-bold text-sm" style="color:${color}">${ticker}</span>
+      <span class="text-xs" style="color:var(--muted)">${info.event}</span>
+      <span class="badge" style="background:${color}22;color:${color};border:1px solid ${color}44">${label}</span>
+      ${overdue||urgent?`<span class="text-xs font-semibold" style="color:${color}">→ Search now</span>`:''}
+    </div>`;
+  });
+}
+
+// ── Peak tracking (trailing stop) ─────────────────────────────────────────────
+function updatePeakPrices() {
+  const positions=loadPositions(); let changed=false;
+  Object.entries(positions).forEach(([t,pos])=>{
+    const s=watchlistData[t]||customData[t]; if(!s)return;
+    if(s.price>(pos.peakPrice||0)){positions[t].peakPrice=s.price;changed=true;}
+  });
+  if(changed)savePositions(positions);
+}
+
+// ── Main refresh ──────────────────────────────────────────────────────────────
+async function refreshAll() {
+  try {
+    // Watchlist
+    const res = await fetch(`${API}/api/stocks`);
+    const stocks = await res.json();
+    stocks.forEach(s=>{ if(!s.error) watchlistData[s.ticker]=s; });
+
+    // Custom tickers (refresh existing data)
+    const customList = loadCustomList();
+    await Promise.all(customList.map(async t=>{
+      try {
+        const r=await fetch(`${API}/api/stock/${t}`);
+        const d=await r.json();
+        if(!d.error)customData[t]=d;
+      } catch {}
+    }));
+
+    updatePeakPrices();
+    renderWatchlistGrid();
+    renderCustomGrid();
+    updateTickerTape();
+    updatePortfolioBar();
+    updateCustomCount();
+    renderSearchSchedule();
+
+    document.getElementById('last-update').textContent=`Updated ${new Date().toLocaleTimeString()}`;
+    document.getElementById('live-dot').style.background='#10b981';
+
+    // Refresh detail if open
+    const tab=activeTab;
+    const sel=selectedTicker[tab];
+    const data=tab==='watchlist'?watchlistData:customData;
+    if(sel&&data[sel]) renderDetail(data[sel],tab);
+    else if(!sel&&tab==='watchlist') {
+      const first=stocks.find(s=>!s.error);
+      if(first){selectStock(first.ticker,'watchlist');}
+    }
+  } catch(e) {
+    document.getElementById('last-update').textContent='Connection error — retrying...';
+    document.getElementById('live-dot').style.background='#ef4444';
+  }
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+renderSearchSchedule();
+updateCustomCount();
+refreshAll();
+setInterval(refreshAll, 60000);
+</script>
+</body>
+</html>
