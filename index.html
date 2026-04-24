@@ -1130,13 +1130,15 @@ function processNordnetCSV(text) {
   const headers = lines[0].split(delim).map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
 
   const idx = {
-    type:   headers.findIndex(h => h.includes('transaktionstype')),
-    name:   headers.findIndex(h => h.includes('rdpapirer') || h.includes('instrument') || h === 'navn'),
-    isin:   headers.findIndex(h => h === 'isin'),
-    antal:  headers.findIndex(h => h === 'antal'),
-    kurs:   headers.findIndex(h => h === 'kurs'),
-    totalt: headers.findIndex(h => h.includes('totalt antal')),
-    date:   headers.findIndex(h => h.includes('handelsdag') || h.includes('gf')),
+    type:    headers.findIndex(h => h.includes('transaktionstype')),
+    name:    headers.findIndex(h => h.includes('rdpapirer') || h.includes('instrument') || h === 'navn'),
+    isin:    headers.findIndex(h => h === 'isin'),
+    antal:   headers.findIndex(h => h === 'antal'),
+    kurs:    headers.findIndex(h => h === 'kurs'),
+    totalt:  headers.findIndex(h => h.includes('totalt antal')),
+    date:    headers.findIndex(h => h.includes('handelsdag') || h.includes('gf')),
+    // Indkøbsværdi = cumulative purchase value; divide by shares → avg cost basis
+    indkoeb: headers.findIndex(h => h.includes('ndkøb') || h.includes('ndkob') || h.includes('anskaffelse')),
   };
 
   if (idx.isin < 0) {
@@ -1150,25 +1152,26 @@ function processNordnetCSV(text) {
     const isin = idx.isin >= 0 ? c[idx.isin] : '';
     if (!isin || isin.length < 12) continue;
     rows.push({
-      type:   (idx.type  >= 0 ? c[idx.type]  : '').toUpperCase(),
-      name:   idx.name   >= 0 ? c[idx.name]   : isin,
-      date:   idx.date   >= 0 ? c[idx.date]   : '',
+      type:    (idx.type   >= 0 ? c[idx.type]   : '').toUpperCase(),
+      name:    idx.name    >= 0 ? c[idx.name]    : isin,
+      date:    idx.date    >= 0 ? c[idx.date]    : '',
       isin,
-      antal:  parseNN(idx.antal  >= 0 ? c[idx.antal]  : '0'),
-      kurs:   parseNN(idx.kurs   >= 0 ? c[idx.kurs]   : '0'),
-      totalt: idx.totalt >= 0 ? parseNN(c[idx.totalt]) : null,
+      antal:   parseNN(idx.antal   >= 0 ? c[idx.antal]   : '0'),
+      kurs:    parseNN(idx.kurs    >= 0 ? c[idx.kurs]    : '0'),
+      totalt:  idx.totalt  >= 0 ? parseNN(c[idx.totalt])  : null,
+      indkoeb: idx.indkoeb >= 0 ? parseNN(c[idx.indkoeb]) : 0,
     });
   }
 
-  // Group by ISIN; use the most-recent-dated row for current Totalt antal
-  // (handles both ascending and descending export order)
+  // Group by ISIN; track the most-recent row for Totalt antal + Indkøbsværdi
   const byISIN = {};
   for (const r of rows) {
-    if (!byISIN[r.isin]) byISIN[r.isin] = { name: r.name, isin: r.isin, latestDate: '', latestTotalt: null, buys: [] };
+    if (!byISIN[r.isin]) byISIN[r.isin] = { name: r.name, isin: r.isin, latestDate: '', latestTotalt: null, latestIndkoeb: 0, buys: [] };
     const g = byISIN[r.isin];
     if (r.totalt !== null && r.date >= g.latestDate) {
-      g.latestDate  = r.date;
+      g.latestDate   = r.date;
       g.latestTotalt = r.totalt;
+      g.latestIndkoeb = r.indkoeb;
     }
     if (isNordnetBuy(r.type) && r.antal > 0) g.buys.push(r);
   }
@@ -1181,9 +1184,24 @@ function processNordnetCSV(text) {
       : rows.filter(r => r.isin === isin).reduce((s, r) => s + r.antal, 0);
     if (shares <= 0.0001) continue;
 
-    let totalValue = 0, totalShares = 0;
-    for (const b of g.buys) { totalValue += b.antal * b.kurs; totalShares += b.antal; }
-    const avgPrice = totalShares > 0 ? totalValue / totalShares : 0;
+    // Primary: Indkøbsværdi ÷ shares (Nordnet's own cost-basis figure, no type parsing needed)
+    let avgPrice = 0;
+    if (g.latestIndkoeb > 0 && shares > 0) {
+      avgPrice = g.latestIndkoeb / shares;
+    } else {
+      // Fallback 1: weighted average of detected buy transactions
+      let tv = 0, ts = 0;
+      for (const b of g.buys) { tv += b.antal * b.kurs; ts += b.antal; }
+      if (ts > 0) {
+        avgPrice = tv / ts;
+      } else {
+        // Fallback 2: any row with positive antal + non-zero kurs (encoding-agnostic)
+        const posRows = rows.filter(r => r.isin === isin && r.antal > 0 && r.kurs > 0);
+        let tv2 = 0, ts2 = 0;
+        for (const r of posRows) { tv2 += r.antal * r.kurs; ts2 += r.antal; }
+        if (ts2 > 0) avgPrice = tv2 / ts2;
+      }
+    }
 
     nordnetParsed.push({ isin, name: g.name, shares: Math.round(shares * 1000) / 1000, avgPrice, ticker: '' });
   }
