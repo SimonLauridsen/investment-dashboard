@@ -235,8 +235,32 @@ let modalTicker    = null;
 let selectedStopStyle = '20';
 
 // ── Persistence ───────────────────────────────────────────────────────────────
-const loadPositions    = () => { try { return JSON.parse(localStorage.getItem('sa_positions')||'{}'); } catch { return {}; } };
-const savePositions    = p  => localStorage.setItem('sa_positions', JSON.stringify(p));
+let positions = {};
+const loadPositions = () => positions;
+const savePositions = p => {
+  positions = p;
+  fetch(`${API}/api/positions`, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(p)});
+};
+
+async function fetchPositions() {
+  try {
+    const res = await fetch(`${API}/api/positions`);
+    const serverPos = await res.json();
+    if (!Object.keys(serverPos).length) {
+      // One-time migration from localStorage
+      const local = JSON.parse(localStorage.getItem('sa_positions') || '{}');
+      if (Object.keys(local).length) {
+        positions = local;
+        savePositions(positions);
+        localStorage.removeItem('sa_positions');
+        return;
+      }
+    }
+    positions = serverPos;
+  } catch {
+    positions = JSON.parse(localStorage.getItem('sa_positions') || '{}');
+  }
+}
 let customList = [];
 const loadCustomList = () => customList;
 const saveCustomList = () => {}; // managed server-side; mutations go through API
@@ -970,7 +994,7 @@ async function refreshAll() {
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 (async () => {
-  await fetchCustomList();
+  await Promise.all([fetchCustomList(), fetchPositions()]);
   renderSearchSchedule();
   updateCustomCount();
   await refreshAll();

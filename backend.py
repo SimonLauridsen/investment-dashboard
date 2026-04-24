@@ -12,22 +12,42 @@ import urllib.request
 import urllib.parse
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
-SECRET_KEY         = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
-DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
+SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
 
-def _make_token() -> str:
-    msg = b"authenticated"
+def _parse_users() -> dict:
+    """Parse USERS env var: 'simon:pass1,lars:pass2' → {simon: pass1, lars: pass2}.
+    Falls back to DASHBOARD_PASSWORD with username 'admin' for backward compat."""
+    raw = os.environ.get("USERS", "").strip()
+    users = {}
+    if raw:
+        for entry in raw.split(","):
+            entry = entry.strip()
+            if ":" in entry:
+                u, p = entry.split(":", 1)
+                users[u.strip().lower()] = p.strip()
+    elif os.environ.get("DASHBOARD_PASSWORD"):
+        users["admin"] = os.environ["DASHBOARD_PASSWORD"]
+    return users
+
+USERS = _parse_users()
+
+def _make_token(username: str) -> str:
+    msg = f"auth:{username}".encode()
     sig = hmac.new(SECRET_KEY.encode(), msg, hashlib.sha256).digest()
     return base64.urlsafe_b64encode(msg + b"|" + sig).decode()
 
-def _verify_token(token: str) -> bool:
+def _verify_token(token: str) -> str | None:
+    """Returns username if valid, None otherwise."""
     try:
         decoded = base64.urlsafe_b64decode(token.encode())
         msg, sig = decoded.split(b"|", 1)
         expected = hmac.new(SECRET_KEY.encode(), msg, hashlib.sha256).digest()
-        return hmac.compare_digest(sig, expected) and msg == b"authenticated"
+        if not hmac.compare_digest(sig, expected):
+            return None
+        prefix, username = msg.decode().split(":", 1)
+        return username if prefix == "auth" else None
     except Exception:
-        return False
+        return None
 
 LOGIN_HTML = """<!DOCTYPE html>
 <html>
@@ -41,8 +61,8 @@ LOGIN_HTML = """<!DOCTYPE html>
     h1{{font-size:20px;font-weight:700;margin-bottom:6px;letter-spacing:-.3px}}
     .sub{{color:#6b7280;font-size:13px;margin-bottom:32px}}
     label{{font-size:12px;color:#9ca3af;display:block;margin-bottom:6px;font-weight:500}}
-    input[type=password]{{width:100%;background:#0a0f1e;border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:11px 14px;color:#e5e7eb;font-size:14px;outline:none;margin-bottom:16px;transition:border .15s}}
-    input[type=password]:focus{{border-color:#3b82f6}}
+    input{{width:100%;background:#0a0f1e;border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:11px 14px;color:#e5e7eb;font-size:14px;outline:none;margin-bottom:16px;transition:border .15s}}
+    input:focus{{border-color:#3b82f6}}
     button{{width:100%;background:#3b82f6;color:#fff;border:none;border-radius:8px;padding:12px;font-size:14px;font-weight:600;cursor:pointer;transition:background .15s}}
     button:hover{{background:#2563eb}}
     .error{{color:#ef4444;font-size:13px;margin-bottom:14px;padding:10px 12px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px}}
@@ -54,8 +74,10 @@ LOGIN_HTML = """<!DOCTYPE html>
     <p class="sub">Personal investment dashboard</p>
     {error}
     <form method="post" action="/login">
+      <label>Username</label>
+      <input type="text" name="username" autofocus autocomplete="username" placeholder="Your username">
       <label>Password</label>
-      <input type="password" name="password" autofocus placeholder="Enter your password">
+      <input type="password" name="password" autocomplete="current-password" placeholder="Your password">
       <button type="submit">Sign in</button>
     </form>
   </div>
@@ -66,8 +88,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.url.path in ("/login", "/logout"):
             return await call_next(request)
-        if not _verify_token(request.cookies.get("sa_session", "")):
+        username = _verify_token(request.cookies.get("sa_session", ""))
+        if not username:
             return RedirectResponse("/login", status_code=302)
+        request.state.username = username
         return await call_next(request)
 
 app = FastAPI()
@@ -79,16 +103,17 @@ def login_page():
     return LOGIN_HTML.format(error="")
 
 @app.post("/login")
-async def do_login(password: str = Form(...)):
-    if DASHBOARD_PASSWORD and password == DASHBOARD_PASSWORD:
+async def do_login(username: str = Form(...), password: str = Form(...)):
+    uname = username.strip().lower()
+    if not USERS:
+        err = '<p class="error">USERS environment variable not set.</p>'
+        return HTMLResponse(LOGIN_HTML.format(error=err), status_code=401)
+    if uname in USERS and USERS[uname] == password:
         resp = RedirectResponse("/", status_code=303)
-        resp.set_cookie("sa_session", _make_token(), httponly=True,
+        resp.set_cookie("sa_session", _make_token(uname), httponly=True,
                         max_age=60 * 60 * 24 * 30, samesite="lax")
         return resp
-    error = '<p class="error">Incorrect password</p>'
-    if not DASHBOARD_PASSWORD:
-        error = '<p class="error">DASHBOARD_PASSWORD environment variable not set.</p>'
-    return HTMLResponse(LOGIN_HTML.format(error=error), status_code=401)
+    return HTMLResponse(LOGIN_HTML.format(error='<p class="error">Invalid username or password</p>'), status_code=401)
 
 @app.post("/logout")
 def logout():
@@ -96,35 +121,52 @@ def logout():
     resp.delete_cookie("sa_session")
     return resp
 
-# ── Custom tickers ────────────────────────────────────────────────────────────
-CUSTOM_FILE = Path("custom_tickers.json")
+# ── Per-user data storage ─────────────────────────────────────────────────────
+USER_DATA_DIR = Path("user_data")
+USER_DATA_DIR.mkdir(exist_ok=True)
 
-def _read_custom() -> list:
+def _user_file(username: str, kind: str) -> Path:
+    return USER_DATA_DIR / f"{kind}_{username}.json"
+
+def _read_user(username: str, kind: str, default):
+    f = _user_file(username, kind)
     try:
-        return json.loads(CUSTOM_FILE.read_text()) if CUSTOM_FILE.exists() else []
+        return json.loads(f.read_text()) if f.exists() else default
     except Exception:
-        return []
+        return default
 
-def _write_custom(tickers: list):
-    CUSTOM_FILE.write_text(json.dumps(tickers))
+def _write_user(username: str, kind: str, data):
+    _user_file(username, kind).write_text(json.dumps(data))
 
+# ── Custom tickers (per user) ─────────────────────────────────────────────────
 @app.get("/api/custom")
-def get_custom():
-    return _read_custom()
+def get_custom(request: Request):
+    return _read_user(request.state.username, "custom", [])
 
 @app.post("/api/custom/{ticker}")
-def add_custom(ticker: str):
-    tickers = _read_custom()
+def add_custom(ticker: str, request: Request):
+    tickers = _read_user(request.state.username, "custom", [])
     if ticker not in tickers:
         tickers.append(ticker)
-        _write_custom(tickers)
+        _write_user(request.state.username, "custom", tickers)
     return tickers
 
 @app.delete("/api/custom/{ticker}")
-def remove_custom(ticker: str):
-    tickers = [t for t in _read_custom() if t != ticker]
-    _write_custom(tickers)
+def remove_custom(ticker: str, request: Request):
+    tickers = [t for t in _read_user(request.state.username, "custom", []) if t != ticker]
+    _write_user(request.state.username, "custom", tickers)
     return tickers
+
+# ── Portfolio positions (per user) ────────────────────────────────────────────
+@app.get("/api/positions")
+def get_positions(request: Request):
+    return _read_user(request.state.username, "positions", {})
+
+@app.put("/api/positions")
+async def save_positions(request: Request):
+    data = await request.json()
+    _write_user(request.state.username, "positions", data)
+    return data
 
 # ── Stock universe ─────────────────────────────────────────────────────────────
 # Active watchlist (6 slots) — persisted to watchlist.json
