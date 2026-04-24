@@ -16,6 +16,66 @@ SECRET_KEY  = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
 INVITE_CODE = os.environ.get("INVITE_CODE", "")
 USERS_FILE  = Path("users.json")
 
+# -- GitHub Gist persistence (free durable storage) ----------------------------
+GIST_ID      = os.environ.get("GIST_ID", "")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+_gist_cache: dict = {}
+_gist_lock  = threading.Lock()
+
+def _gist_enabled() -> bool:
+    return bool(GIST_ID and GITHUB_TOKEN)
+
+def _gist_fetch_all():
+    """Load all Gist files into _gist_cache at startup."""
+    if not _gist_enabled():
+        return
+    try:
+        req = urllib.request.Request(
+            f"https://api.github.com/gists/{GIST_ID}",
+            headers={
+                "Authorization": f"token {GITHUB_TOKEN}",
+                "Accept": "application/vnd.github.v3+json",
+                "User-Agent": "InvestmentDashboard/1.0",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            gist_data = json.loads(resp.read())
+        with _gist_lock:
+            for filename, file_info in gist_data.get("files", {}).items():
+                try:
+                    _gist_cache[filename] = json.loads(file_info.get("content", "null"))
+                except Exception:
+                    pass
+        print(f"[gist] Loaded {len(_gist_cache)} files from Gist")
+    except Exception as e:
+        print(f"[gist] Startup fetch failed: {e}")
+
+def _gist_push(filename: str, data):
+    if not _gist_enabled():
+        return
+    try:
+        payload = json.dumps({"files": {filename: {"content": json.dumps(data)}}}).encode()
+        req = urllib.request.Request(
+            f"https://api.github.com/gists/{GIST_ID}",
+            data=payload, method="PATCH",
+            headers={
+                "Authorization": f"token {GITHUB_TOKEN}",
+                "Accept": "application/vnd.github.v3+json",
+                "Content-Type": "application/json",
+                "User-Agent": "InvestmentDashboard/1.0",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15):
+            pass
+    except Exception as e:
+        print(f"[gist] Push failed for {filename}: {e}")
+
+def _gist_write(filename: str, data):
+    """Update in-memory cache immediately; push to Gist in background."""
+    with _gist_lock:
+        _gist_cache[filename] = data
+    threading.Thread(target=_gist_push, args=(filename, data), daemon=True).start()
+
 # -- Password hashing (stdlib only, no bcrypt dependency) ----------------------
 def _hash_pw(pw: str) -> str:
     salt = os.urandom(16).hex()
@@ -32,13 +92,19 @@ def _check_pw(pw: str, stored: str) -> bool:
 
 # -- File-backed user store ----------------------------------------------------
 def _load_users() -> dict:
+    if _gist_enabled():
+        with _gist_lock:
+            return dict(_gist_cache.get("users.json") or {})
     try:
         return json.loads(USERS_FILE.read_text()) if USERS_FILE.exists() else {}
     except Exception:
         return {}
 
 def _save_users(users: dict):
-    USERS_FILE.write_text(json.dumps(users))
+    if _gist_enabled():
+        _gist_write("users.json", users)
+    else:
+        USERS_FILE.write_text(json.dumps(users))
 
 def _init_users():
     """Seed accounts from USERS / DASHBOARD_PASSWORD env vars on every startup."""
@@ -59,6 +125,7 @@ def _init_users():
     if changed:
         _save_users(users)
 
+_gist_fetch_all()
 _init_users()
 
 # -- Session tokens ------------------------------------------------------------
@@ -172,8 +239,6 @@ async def do_login(username: str = Form(...), password: str = Form(...)):
 
 @app.get("/register", response_class=HTMLResponse)
 def register_page():
-    if not INVITE_CODE:
-        return RedirectResponse("/login", status_code=302)
     return REGISTER_HTML.format(error="")
 
 @app.post("/register")
@@ -181,7 +246,7 @@ async def do_register(invite_code: str = Form(...), username: str = Form(...),
                       password: str = Form(...), confirm: str = Form(...)):
     def err(msg): return HTMLResponse(REGISTER_HTML.format(error=f'<p class="error">{msg}</p>'), 400)
     if not INVITE_CODE:
-        return RedirectResponse("/login", status_code=302)
+        return err("Registration is disabled — contact Simon to get an account.")
     if invite_code != INVITE_CODE:
         return err("Wrong invite code.")
     uname = username.strip().lower()
@@ -217,6 +282,11 @@ def _user_file(username: str, kind: str) -> Path:
     return USER_DATA_DIR / f"{kind}_{username}.json"
 
 def _read_user(username: str, kind: str, default):
+    filename = f"{kind}_{username}.json"
+    if _gist_enabled():
+        with _gist_lock:
+            val = _gist_cache.get(filename)
+        return val if val is not None else default
     f = _user_file(username, kind)
     try:
         return json.loads(f.read_text()) if f.exists() else default
@@ -224,7 +294,11 @@ def _read_user(username: str, kind: str, default):
         return default
 
 def _write_user(username: str, kind: str, data):
-    _user_file(username, kind).write_text(json.dumps(data))
+    filename = f"{kind}_{username}.json"
+    if _gist_enabled():
+        _gist_write(filename, data)
+    else:
+        _user_file(username, kind).write_text(json.dumps(data))
 
 # ── Custom tickers (per user) ─────────────────────────────────────────────────
 @app.get("/api/custom")
@@ -427,26 +501,41 @@ WATCHLIST_FILE    = Path("watchlist.json")
 REPLACEMENTS_FILE = Path("replacements.json")
 
 def _load_watchlist() -> list:
-    try:
-        if WATCHLIST_FILE.exists():
-            saved = json.loads(WATCHLIST_FILE.read_text())
-            if isinstance(saved, list) and saved:
-                return saved
-    except Exception:
-        pass
+    if _gist_enabled():
+        with _gist_lock:
+            saved = _gist_cache.get("watchlist.json")
+        if isinstance(saved, list) and saved:
+            return saved
+    else:
+        try:
+            if WATCHLIST_FILE.exists():
+                saved = json.loads(WATCHLIST_FILE.read_text())
+                if isinstance(saved, list) and saved:
+                    return saved
+        except Exception:
+            pass
     return list(STOCKS.keys())
 
 def _save_watchlist(wl: list):
-    WATCHLIST_FILE.write_text(json.dumps(wl))
+    if _gist_enabled():
+        _gist_write("watchlist.json", wl)
+    else:
+        WATCHLIST_FILE.write_text(json.dumps(wl))
 
 def _load_replacements() -> list:
+    if _gist_enabled():
+        with _gist_lock:
+            return list(_gist_cache.get("replacements.json") or [])
     try:
         return json.loads(REPLACEMENTS_FILE.read_text()) if REPLACEMENTS_FILE.exists() else []
     except Exception:
         return []
 
 def _save_replacements(log: list):
-    REPLACEMENTS_FILE.write_text(json.dumps(log[-20:]))
+    if _gist_enabled():
+        _gist_write("replacements.json", log[-20:])
+    else:
+        REPLACEMENTS_FILE.write_text(json.dumps(log[-20:]))
 
 ACTIVE_WATCHLIST = _load_watchlist()
 
