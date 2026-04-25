@@ -1206,16 +1206,52 @@ function renderNordnetPreview() {
       <td class="py-2 pr-4" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${p.name}">${p.name}</td>
       <td class="py-2 pr-4 text-right">${p.shares}</td>
       <td class="py-2 pr-4 text-right">${p.avgPrice > 0 ? p.avgPrice.toFixed(2) : '—'}</td>
-      <td class="py-2 pr-4">
-        <input type="text" id="nn-ticker-${i}" value="${p.ticker}" placeholder="Resolving…"
-               style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;color:var(--fg);font-size:12px;width:110px"
-               oninput="nordnetParsed[${i}].ticker=this.value.trim().toUpperCase()">
+      <td class="py-2 pr-4" style="position:relative">
+        <input type="text" id="nn-ticker-${i}" value="${p.ticker}" placeholder="Type to search…"
+               autocomplete="off"
+               style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;color:var(--fg);font-size:12px;width:120px"
+               oninput="nnTickerInput(${i},this.value)"
+               onblur="setTimeout(()=>nnHideDrop(${i}),150)">
+        <div id="nn-drop-${i}" style="display:none;position:absolute;top:100%;left:0;z-index:99;background:var(--card);border:1px solid var(--border);border-radius:6px;min-width:180px;box-shadow:0 4px 12px rgba(0,0,0,.4)"></div>
       </td>
       <td class="py-2">
         <button onclick="removeNordnetRow(${i})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;padding:2px 6px" title="Remove">✕</button>
       </td>
     </tr>`).join('');
   document.getElementById('nordnet-preview').style.display = 'block';
+}
+
+const _nnSearchTimers = {};
+function nnTickerInput(i, val) {
+  nordnetParsed[i].ticker = val.trim().toUpperCase();
+  clearTimeout(_nnSearchTimers[i]);
+  if (val.length < 1) { nnHideDrop(i); return; }
+  _nnSearchTimers[i] = setTimeout(() => nnRunSearch(i, val), 250);
+}
+function nnHideDrop(i) {
+  const d = document.getElementById(`nn-drop-${i}`);
+  if (d) d.style.display = 'none';
+}
+async function nnRunSearch(i, q) {
+  const results = await searchTickers(q);
+  const drop = document.getElementById(`nn-drop-${i}`);
+  if (!drop) return;
+  if (!results.length) { drop.style.display = 'none'; return; }
+  drop.innerHTML = results.slice(0, 6).map(r =>
+    `<div onclick="nnPickTicker(${i},'${r.symbol}')"
+          style="padding:6px 10px;cursor:pointer;font-size:12px;border-bottom:1px solid rgba(255,255,255,.05)"
+          onmouseenter="this.style.background='rgba(255,255,255,.06)'"
+          onmouseleave="this.style.background=''">
+       <span style="font-weight:600">${r.symbol}</span>
+       <span style="color:var(--muted);margin-left:6px">${r.name}</span>
+     </div>`).join('');
+  drop.style.display = 'block';
+}
+function nnPickTicker(i, symbol) {
+  nordnetParsed[i].ticker = symbol;
+  const inp = document.getElementById(`nn-ticker-${i}`);
+  if (inp) inp.value = symbol;
+  nnHideDrop(i);
 }
 
 // Map ISIN country prefix → preferred Yahoo Finance exchange suffix
