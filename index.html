@@ -1171,6 +1171,9 @@ function processNordnetCSV(text) {
     });
   }
   console.log(`[NN] ${rows.length} data rows parsed. Unique ISINs: ${[...new Set(rows.map(r=>r.isin))].length}`);
+  console.log('[NN] Column indices:', idx);
+  console.log('[NN] Unique transaction types:', [...new Set(rows.map(r => r.type))]);
+  console.log('[NN] First 3 rows (type/antal/kurs):', rows.slice(0,3).map(r=>({type:r.type,antal:r.antal,kurs:r.kurs,isin:r.isin})));
 
   // Group by ISIN — derive net position from transaction type, not antal sign
   // (Nordnet CSV stores antal as positive for both buys and sells)
