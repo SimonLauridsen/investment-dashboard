@@ -1131,7 +1131,7 @@ function processNordnetCSV(text) {
 
   const idx = {
     type:    headers.findIndex(h => h.includes('transaktionstype')),
-    name:    headers.findIndex(h => h.includes('rdpapirer') || h.includes('instrument') || h === 'navn'),
+    name:    headers.findIndex(h => h.includes('rdipapir') || h.includes('papirer') || h.includes('instrument') || h === 'navn'),
     isin:    headers.findIndex(h => h === 'isin'),
     antal:   headers.findIndex(h => h === 'antal'),
     kurs:    headers.findIndex(h => h === 'kurs'),
@@ -1156,7 +1156,7 @@ function processNordnetCSV(text) {
       isin,
       antal:   parseNN(idx.antal   >= 0 ? c[idx.antal]   : '0'),
       kurs:    parseNN(idx.kurs    >= 0 ? c[idx.kurs]    : '0'),
-      totalt:  idx.totalt  >= 0 ? parseNN(c[idx.totalt])  : null,
+      totalt:  idx.totalt  >= 0 && c[idx.totalt].trim() !== '' ? parseNN(c[idx.totalt]) : null,
     });
   }
   console.log(`[NN] ${rows.length} data rows parsed. Unique ISINs: ${[...new Set(rows.map(r=>r.isin))].length}`);
