@@ -573,7 +573,7 @@ def _backfill_known_swaps():
     dirty = False
     known = [
         # (removed, added, reason, date)  — add entries here as needed
-        ("CRML", "LDOS", "Signal turned SELL", "2026-04-25"),
+        ("CRML", "LDOS", "Signal turned SELL", "2026-04-27"),
     ]
     existing = {(e["removed"], e["added"]) for e in log}
     for removed, added, reason, dt in known:
