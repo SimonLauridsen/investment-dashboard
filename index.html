@@ -1204,9 +1204,9 @@ function processNordnetCSV(text) {
     // the latest positive totalt antal (excludes dividend rows which always have totalt=0)
     const shares = g.hasTypedRows ? g.totalAntal : (g.latestPosTotalt ?? 0);
 
-    // GAV = weighted average of kurs across buy rows, in the stock's own currency.
-    // indkøbsværdi is in DKK (account currency) so cannot be used directly for non-DKK stocks.
-    const buyRows = rows.filter(r => r.isin === isin && r.antal > 0 && r.kurs > 0);
+    // GAV = weighted average of kurs across actual purchase transactions only.
+    // Must filter by type to exclude UDBYTTE rows (which also have antal>0 and kurs>0).
+    const buyRows = rows.filter(r => r.isin === isin && isNordnetBuy(r.type) && r.antal > 0 && r.kurs > 0);
     let tv = 0, ts = 0;
     for (const r of buyRows) { tv += r.antal * r.kurs; ts += r.antal; }
     const avgPrice = ts > 0 ? tv / ts : 0;
