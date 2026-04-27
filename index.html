@@ -1220,10 +1220,24 @@ function processNordnetCSV(text) {
     // for partial sells and cost averaging). Fall back to weighted average if not available.
     let avgPrice = g.latestMiddelkurs;
     if (!avgPrice) {
-      const buyRows = rows.filter(r => r.isin === isin && isNordnetBuy(r.type) && r.antal > 0 && r.kurs > 0);
-      let tv = 0, ts = 0;
-      for (const r of buyRows) { tv += r.antal * r.kurs; ts += r.antal; }
-      avgPrice = ts > 0 ? tv / ts : 0;
+      // Simulate running position chronologically so sells correctly zero out prior cost basis
+      const tradeRows = rows
+        .filter(r => r.isin === isin && (isNordnetBuy(r.type) || isNordnetSell(r.type)) && r.antal > 0 && r.kurs > 0)
+        .sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+      let runCost = 0, runShares = 0;
+      for (const r of tradeRows) {
+        if (isNordnetBuy(r.type)) {
+          runCost += r.antal * r.kurs;
+          runShares += r.antal;
+        } else {
+          // Remove proportional cost for shares sold; full sell resets to zero
+          if (runShares > 0) {
+            runCost = Math.max(0, runCost * (1 - r.antal / runShares));
+            runShares = Math.max(0, runShares - r.antal);
+          }
+        }
+      }
+      avgPrice = runShares > 0.0001 ? runCost / runShares : 0;
     }
 
     const kept = shares > 0.0001;
