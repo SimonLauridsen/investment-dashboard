@@ -1182,7 +1182,7 @@ function processNordnetCSV(text) {
   // Group by ISIN
   const byISIN = {};
   for (const r of rows) {
-    if (!byISIN[r.isin]) byISIN[r.isin] = { name: r.name, isin: r.isin, totalAntal: 0, hasTypedRows: false, latestPosTotalt: null, latestPosTotaltDate: '', latestBuyDate: '', latestMiddelkurs: 0 };
+    if (!byISIN[r.isin]) byISIN[r.isin] = { name: r.name, isin: r.isin, totalAntal: 0, hasTypedRows: false, latestPosTotalt: null, latestPosTotaltDate: '', latestTradeDate: '', latestMiddelkurs: 0 };
     const g = byISIN[r.isin];
     if (r.name && r.name !== r.isin && g.name === r.isin) g.name = r.name;
 
@@ -1190,14 +1190,15 @@ function processNordnetCSV(text) {
     if (isNordnetBuy(r.type)) {
       g.totalAntal += qty;
       g.hasTypedRows = true;
-      // Middelkurs on the most recent KØBT row = Nordnet's running GAV per share
-      if (r.middelkurs > 0 && r.date >= g.latestBuyDate) {
-        g.latestBuyDate    = r.date;
-        g.latestMiddelkurs = r.middelkurs;
-      }
     } else if (isNordnetSell(r.type)) {
       g.totalAntal -= qty;
       g.hasTypedRows = true;
+    }
+    // Track middelkurs from the most recent KØBT or SOLGT row — Nordnet updates it after
+    // every trade including sells, so the latest trade always reflects current GAV
+    if ((isNordnetBuy(r.type) || isNordnetSell(r.type)) && r.middelkurs > 0 && r.date >= g.latestTradeDate) {
+      g.latestTradeDate  = r.date;
+      g.latestMiddelkurs = r.middelkurs;
     }
 
     // Fallback share count: latest positive totalt (UDBYTTE rows have totalt=0, naturally excluded)
