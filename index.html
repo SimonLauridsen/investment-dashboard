@@ -1172,9 +1172,9 @@ function processNordnetCSV(text) {
     });
   }
   console.log(`[NN] ${rows.length} data rows parsed. Unique ISINs: ${[...new Set(rows.map(r=>r.isin))].length}`);
-  console.log('[NN] Column indices:', idx);
-  console.log('[NN] Unique transaction types:', [...new Set(rows.map(r => r.type))]);
-  console.log('[NN] First 3 rows (type/antal/kurs):', rows.slice(0,3).map(r=>({type:r.type,antal:r.antal,kurs:r.kurs,isin:r.isin})));
+  console.log('[NN] Column indices: type=' + idx.type + ' antal=' + idx.antal + ' kurs=' + idx.kurs + ' totalt=' + idx.totalt + ' isin=' + idx.isin + ' name=' + idx.name);
+  console.log('[NN] Unique transaction types: ' + JSON.stringify([...new Set(rows.map(r => r.type))]));
+  console.log('[NN] First 3 rows: ' + JSON.stringify(rows.slice(0,3).map(r=>({type:r.type,antal:r.antal,kurs:r.kurs,isin:r.isin}))));
 
   // Group by ISIN
   const byISIN = {};
