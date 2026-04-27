@@ -1117,6 +1117,13 @@ function parseNN(str) {
   return parseFloat(String(str || '').replace(/\./g, '').replace(',', '.')) || 0;
 }
 
+// Nordnet exports dates as DD-MM-YYYY; convert to YYYY-MM-DD so string comparison works correctly
+function normDate(s) {
+  if (!s) return '';
+  const m = s.match(/^(\d{2})[-./](\d{2})[-./](\d{4})$/);
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : s;
+}
+
 function isNordnetBuy(type) {
   // Match KØB / KOB / KÖP / KJØP and encoding-garbled variants like K?B
   const t = (type || '').trim();
@@ -1152,7 +1159,7 @@ function processNordnetCSV(text) {
     rows.push({
       type:    (idx.type   >= 0 ? c[idx.type]   : '').toUpperCase(),
       name:    idx.name    >= 0 ? c[idx.name]    : isin,
-      date:    idx.date    >= 0 ? c[idx.date]    : '',
+      date:    normDate(idx.date >= 0 ? c[idx.date] : ''),
       isin,
       antal:   parseNN(idx.antal   >= 0 ? c[idx.antal]   : '0'),
       kurs:    parseNN(idx.kurs    >= 0 ? c[idx.kurs]    : '0'),
