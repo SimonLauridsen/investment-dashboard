@@ -1168,6 +1168,7 @@ function processNordnetCSV(text) {
       isin,
       antal:   parseNN(idx.antal   >= 0 ? c[idx.antal]   : '0'),
       kurs:    parseNN(idx.kurs    >= 0 ? c[idx.kurs]    : '0'),
+      totalt:  idx.totalt >= 0 && c[idx.totalt] && c[idx.totalt].trim() !== '' ? parseNN(c[idx.totalt]) : null,
     });
   }
   console.log(`[NN] ${rows.length} data rows parsed. Unique ISINs: ${[...new Set(rows.map(r=>r.isin))].length}`);
@@ -1175,24 +1176,32 @@ function processNordnetCSV(text) {
   console.log('[NN] Unique transaction types:', [...new Set(rows.map(r => r.type))]);
   console.log('[NN] First 3 rows (type/antal/kurs):', rows.slice(0,3).map(r=>({type:r.type,antal:r.antal,kurs:r.kurs,isin:r.isin})));
 
-  // Group by ISIN — derive net position from transaction type, not antal sign
-  // (Nordnet CSV stores antal as positive for both buys and sells)
+  // Group by ISIN
   const byISIN = {};
   for (const r of rows) {
-    if (!byISIN[r.isin]) byISIN[r.isin] = { name: r.name, isin: r.isin, totalAntal: 0 };
+    if (!byISIN[r.isin]) byISIN[r.isin] = { name: r.name, isin: r.isin, totalAntal: 0, hasTypedRows: false, latestPosTotalt: null, latestPosTotaltDate: '' };
     const g = byISIN[r.isin];
     if (r.name && r.name !== r.isin && g.name === r.isin) g.name = r.name;
+
+    // Primary: type-based sum (buy adds, sell subtracts)
     const qty = Math.abs(r.antal);
-    if (isNordnetBuy(r.type))  g.totalAntal += qty;
-    else if (isNordnetSell(r.type)) g.totalAntal -= qty;
-    // Dividends, fees, interest etc. don't affect position — ignored
+    if (isNordnetBuy(r.type))       { g.totalAntal += qty; g.hasTypedRows = true; }
+    else if (isNordnetSell(r.type)) { g.totalAntal -= qty; g.hasTypedRows = true; }
+
+    // Fallback: track the latest positive totalt (UDBYTTE rows have totalt=0 so they're naturally excluded)
+    if (r.totalt > 0 && r.date >= g.latestPosTotaltDate) {
+      g.latestPosTotaltDate = r.date;
+      g.latestPosTotalt = r.totalt;
+    }
   }
 
   nordnetParsed = [];
   console.log('[NN] Per-ISIN summary:');
   for (const isin in byISIN) {
     const g = byISIN[isin];
-    const shares = g.totalAntal;
+    // Use type-based sum when the regex matched at least one row; otherwise fall back to
+    // the latest positive totalt antal (excludes dividend rows which always have totalt=0)
+    const shares = g.hasTypedRows ? g.totalAntal : (g.latestPosTotalt ?? 0);
 
     // GAV = weighted average of kurs across buy rows, in the stock's own currency.
     // indkøbsværdi is in DKK (account currency) so cannot be used directly for non-DKK stocks.
@@ -1202,7 +1211,8 @@ function processNordnetCSV(text) {
     const avgPrice = ts > 0 ? tv / ts : 0;
 
     const kept = shares > 0.0001;
-    console.log(`  ${kept ? '✓' : '✗ SKIPPED'} ${isin}  "${g.name}"  totalAntal=${shares.toFixed(4)}  buyRows=${buyRows.length}  avgPrice=${avgPrice.toFixed(2)}`);
+    const src = g.hasTypedRows ? 'type-sum' : 'totalt-fallback';
+    console.log(`  ${kept ? '✓' : '✗ SKIPPED'} ${isin}  "${g.name}"  shares=${shares.toFixed(4)} [${src}]  buyRows=${buyRows.length}  avgPrice=${avgPrice.toFixed(2)}`);
 
     if (!kept) continue;
     nordnetParsed.push({ isin, name: g.name, shares: Math.round(shares * 1000) / 1000, avgPrice, ticker: '' });
