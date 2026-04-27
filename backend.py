@@ -567,7 +567,7 @@ def _save_replacements(log: list):
 ACTIVE_WATCHLIST = _load_watchlist()
 
 def _backfill_known_swaps():
-    """Seed replacement log entries that predate the logging mechanism."""
+    """Seed/correct replacement log entries that predate the logging mechanism."""
     log = _load_replacements()
     tickers = _wl_tickers()
     dirty = False
@@ -576,12 +576,20 @@ def _backfill_known_swaps():
         {"removed": "CRML", "added": "LDOS", "reason": "Signal turned SELL",
          "date": "2026-04-27", "removed_added_date": "2026-04-24"},
     ]
-    existing = {(e["removed"], e["added"]) for e in log}
+    existing = {(e["removed"], e["added"]): i for i, e in enumerate(log)}
     for entry in known:
         key = (entry["removed"], entry["added"])
-        if entry["removed"] not in tickers and entry["added"] in tickers and key not in existing:
-            log.append(entry)
-            dirty = True
+        if entry["removed"] not in tickers and entry["added"] in tickers:
+            if key not in existing:
+                log.append(entry)
+                dirty = True
+            else:
+                # Correct/fill any wrong or missing fields in the existing entry
+                idx = existing[key]
+                for field, value in entry.items():
+                    if log[idx].get(field) != value:
+                        log[idx][field] = value
+                        dirty = True
     if dirty:
         _save_replacements(log)
 
