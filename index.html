@@ -213,6 +213,7 @@
       My Dashboard
       <span id="custom-count" class="ml-2 px-2 py-0.5 rounded-full text-xs" style="background:var(--border);color:var(--muted)">0</span>
     </button>
+    <button id="tab-history"   class="tab-btn"        onclick="switchTab('history')">History</button>
   </div>
 
   <!-- ── WATCHLIST TAB ─────────────────────────────────────────────────── -->
@@ -271,6 +272,18 @@
         <p class="text-sm" style="color:var(--muted)">Search for a ticker above to start tracking it</p>
       </div>
     </div>
+  </div>
+
+  <!-- ── HISTORY TAB ─────────────────────────────────────────────────── -->
+  <div id="tab-history-content" style="display:none">
+    <div class="card p-5 mb-4">
+      <div class="flex items-center justify-between mb-1">
+        <span class="font-semibold">Watchlist Change Log</span>
+        <span class="text-xs" style="color:var(--muted)">Auto-replacements — newest first</span>
+      </div>
+      <p class="text-xs" style="color:var(--muted)">A stock is replaced when its signal turns SELL/STRONG SELL or its catalyst date passes without a BUY signal. The best-scoring candidate from the bench is promoted.</p>
+    </div>
+    <div id="history-log"></div>
   </div>
 
   <!-- ── Shared detail panel ───────────────────────────────────────────── -->
@@ -371,13 +384,16 @@ function switchTab(tab) {
   activeTab = tab;
   document.getElementById('tab-watchlist-content').style.display = tab==='watchlist' ? '' : 'none';
   document.getElementById('tab-custom-content').style.display    = tab==='custom'    ? '' : 'none';
+  document.getElementById('tab-history-content').style.display   = tab==='history'   ? '' : 'none';
   document.getElementById('tab-watchlist').className = 'tab-btn' + (tab==='watchlist'?' active':'');
   document.getElementById('tab-custom').className    = 'tab-btn' + (tab==='custom'   ?' active':'');
+  document.getElementById('tab-history').className   = 'tab-btn' + (tab==='history'  ?' active':'');
+  document.getElementById('detail-panel').style.display = 'none';
+  if (tab === 'history') { renderHistoryLog(); return; }
   // Re-render detail for the active tab's selection
   const sel = selectedTicker[tab];
   const data = tab==='watchlist' ? watchlistData : customData;
   if (sel && data[sel]) renderDetail(data[sel], tab);
-  else document.getElementById('detail-panel').style.display = 'none';
 }
 
 // ── Position math ─────────────────────────────────────────────────────────────
@@ -1048,6 +1064,45 @@ async function renderReplacements() {
         <span style="color:var(--muted);opacity:.6">${r.date}</span>
       </div>`).join('<hr style="border-color:var(--border);margin:4px 0">');
   } catch {}
+}
+
+// ── History tab ───────────────────────────────────────────────────────────────
+async function renderHistoryLog() {
+  const el = document.getElementById('history-log');
+  el.innerHTML = '<div class="card p-6 text-center" style="color:var(--muted)">Loading…</div>';
+  try {
+    const res = await fetch(`${API}/api/replacements`);
+    const log = await res.json();
+    if (!log.length) {
+      el.innerHTML = '<div class="card p-6 text-center" style="color:var(--muted)">No replacements yet — the watchlist has not changed since launch.</div>';
+      return;
+    }
+    const items = [...log].reverse();
+    el.innerHTML = items.map((r, i) => {
+      const rc = tickerColor(r.removed);
+      const ac = tickerColor(r.added);
+      return `
+        <div class="card p-4 mb-3 flex flex-wrap items-start gap-4">
+          <div class="text-xs font-mono px-2 py-1 rounded" style="background:var(--bg);color:var(--muted);white-space:nowrap;align-self:center">${r.date}</div>
+          <div class="flex items-center gap-3 flex-1 min-w-0">
+            <div class="text-center">
+              <div class="font-bold text-base" style="color:${rc}">${r.removed}</div>
+              <div class="text-xs mt-0.5" style="color:var(--muted)">removed</div>
+            </div>
+            <div style="color:var(--muted);font-size:20px;line-height:1">→</div>
+            <div class="text-center">
+              <div class="font-bold text-base" style="color:${ac}">${r.added}</div>
+              <div class="text-xs mt-0.5" style="color:#10b981">promoted</div>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="text-xs px-2 py-1 rounded" style="background:rgba(239,68,68,.08);color:#ef4444;border:1px solid rgba(239,68,68,.2);display:inline-block">${r.reason}</div>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+  } catch {
+    el.innerHTML = '<div class="card p-6 text-center" style="color:var(--muted)">Could not load history.</div>';
+  }
 }
 
 // ── Peak tracking (trailing stop) ─────────────────────────────────────────────
