@@ -566,6 +566,25 @@ def _save_replacements(log: list):
 
 ACTIVE_WATCHLIST = _load_watchlist()
 
+def _backfill_known_swaps():
+    """Seed replacement log entries that predate the logging mechanism."""
+    log = _load_replacements()
+    tickers = _wl_tickers()
+    dirty = False
+    known = [
+        # (removed, added, reason, date)  — add entries here as needed
+        ("CRML", "LDOS", "Signal turned SELL", "2026-04-25"),
+    ]
+    existing = {(e["removed"], e["added"]) for e in log}
+    for removed, added, reason, dt in known:
+        if removed not in tickers and added in tickers and (removed, added) not in existing:
+            log.append({"removed": removed, "added": added, "reason": reason, "date": dt})
+            dirty = True
+    if dirty:
+        _save_replacements(log)
+
+_backfill_known_swaps()
+
 # ── Exchange / Nordnet URL ────────────────────────────────────────────────────
 EXCHANGE_TO_NORDNET = {
     "NMS": "xnas", "NGM": "xnas", "NCM": "xnas",
