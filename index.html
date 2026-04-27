@@ -1159,6 +1159,7 @@ function processNordnetCSV(text) {
       totalt:  idx.totalt  >= 0 ? parseNN(c[idx.totalt])  : null,
     });
   }
+  console.log(`[NN] ${rows.length} data rows parsed. Unique ISINs: ${[...new Set(rows.map(r=>r.isin))].length}`);
 
   // Group by ISIN; track latest row for Totalt antal
   const byISIN = {};
@@ -1172,12 +1173,12 @@ function processNordnetCSV(text) {
   }
 
   nordnetParsed = [];
+  console.log('[NN] Per-ISIN summary:');
   for (const isin in byISIN) {
     const g = byISIN[isin];
     const shares = g.latestTotalt !== null
       ? g.latestTotalt
       : rows.filter(r => r.isin === isin).reduce((s, r) => s + r.antal, 0);
-    if (shares <= 0.0001) continue;
 
     // GAV = weighted average of kurs across buy rows, in the stock's own currency.
     // indkøbsværdi is in DKK (account currency) so cannot be used directly for non-DKK stocks.
@@ -1186,6 +1187,10 @@ function processNordnetCSV(text) {
     for (const r of buyRows) { tv += r.antal * r.kurs; ts += r.antal; }
     const avgPrice = ts > 0 ? tv / ts : 0;
 
+    const kept = shares > 0.0001;
+    console.log(`  ${kept ? '✓' : '✗ SKIPPED'} ${isin}  "${g.name}"  latestTotalt=${g.latestTotalt}  shares=${shares.toFixed(4)}  buyRows=${buyRows.length}  avgPrice=${avgPrice.toFixed(2)}`);
+
+    if (!kept) continue;
     nordnetParsed.push({ isin, name: g.name, shares: Math.round(shares * 1000) / 1000, avgPrice, ticker: '' });
   }
 
