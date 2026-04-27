@@ -1125,9 +1125,14 @@ function normDate(s) {
 }
 
 function isNordnetBuy(type) {
-  // Match KØB / KOB / KÖP / KJØP and encoding-garbled variants like K?B
   const t = (type || '').trim();
   return /^k.{0,2}[bp]$/i.test(t) || t.toUpperCase() === 'BUY';
+}
+
+function isNordnetSell(type) {
+  // SALG (Danish/Norwegian), SÄLJ (Swedish)
+  const t = (type || '').trim();
+  return /^s.l[gj]$/i.test(t) || t.toUpperCase() === 'SELL';
 }
 
 function processNordnetCSV(text) {
@@ -1167,15 +1172,17 @@ function processNordnetCSV(text) {
   }
   console.log(`[NN] ${rows.length} data rows parsed. Unique ISINs: ${[...new Set(rows.map(r=>r.isin))].length}`);
 
-  // Group by ISIN — sum antal (positive=buy, negative=sell) for reliable share count
+  // Group by ISIN — derive net position from transaction type, not antal sign
+  // (Nordnet CSV stores antal as positive for both buys and sells)
   const byISIN = {};
   for (const r of rows) {
     if (!byISIN[r.isin]) byISIN[r.isin] = { name: r.name, isin: r.isin, totalAntal: 0 };
-    byISIN[r.isin].totalAntal += r.antal;
-    // Keep the first non-ISIN name we see (CSV is newest-first, name should be consistent)
-    if (r.name && r.name !== r.isin && byISIN[r.isin].name === r.isin) {
-      byISIN[r.isin].name = r.name;
-    }
+    const g = byISIN[r.isin];
+    if (r.name && r.name !== r.isin && g.name === r.isin) g.name = r.name;
+    const qty = Math.abs(r.antal);
+    if (isNordnetBuy(r.type))  g.totalAntal += qty;
+    else if (isNordnetSell(r.type)) g.totalAntal -= qty;
+    // Dividends, fees, interest etc. don't affect position — ignored
   }
 
   nordnetParsed = [];
