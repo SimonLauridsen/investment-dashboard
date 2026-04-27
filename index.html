@@ -1081,23 +1081,39 @@ async function renderHistoryLog() {
     el.innerHTML = items.map((r, i) => {
       const rc = tickerColor(r.removed);
       const ac = tickerColor(r.added);
+      let hypoHtml = '';
+      if (r.removed_price_at_add && r.removed_price_exit) {
+        const pct = (r.removed_price_exit - r.removed_price_at_add) / r.removed_price_at_add * 100;
+        const val = 10000 * (1 + pct / 100);
+        const up  = pct >= 0;
+        const clr = up ? '#10b981' : '#ef4444';
+        const sign = up ? '+' : '';
+        const since = r.removed_added_date ? ` since ${r.removed_added_date}` : '';
+        hypoHtml = `<div class="flex items-center justify-between mt-2 px-2 py-1.5 rounded-lg" style="background:rgba(99,102,241,.07);border:1px solid rgba(99,102,241,.18)">
+          <span class="text-xs" style="color:var(--muted)">10k DKK${since}</span>
+          <span class="text-xs font-bold" style="color:${clr}">${val.toLocaleString('da-DK', {maximumFractionDigits:0})} DKK (${sign}${pct.toFixed(1)}%)</span>
+        </div>`;
+      }
       return `
-        <div class="card p-4 mb-3 flex flex-wrap items-start gap-4">
-          <div class="text-xs font-mono px-2 py-1 rounded" style="background:var(--bg);color:var(--muted);white-space:nowrap;align-self:center">${r.date}</div>
-          <div class="flex items-center gap-3 flex-1 min-w-0">
-            <div class="text-center">
-              <div class="font-bold text-base" style="color:${rc}">${r.removed}</div>
-              <div class="text-xs mt-0.5" style="color:var(--muted)">removed</div>
-            </div>
-            <div style="color:var(--muted);font-size:20px;line-height:1">→</div>
-            <div class="text-center">
-              <div class="font-bold text-base" style="color:${ac}">${r.added}</div>
-              <div class="text-xs mt-0.5" style="color:#10b981">promoted</div>
-            </div>
-            <div class="flex-1 min-w-0">
-              <div class="text-xs px-2 py-1 rounded" style="background:rgba(239,68,68,.08);color:#ef4444;border:1px solid rgba(239,68,68,.2);display:inline-block">${r.reason}</div>
+        <div class="card p-4 mb-3">
+          <div class="flex flex-wrap items-start gap-4">
+            <div class="text-xs font-mono px-2 py-1 rounded" style="background:var(--bg);color:var(--muted);white-space:nowrap;align-self:center">${r.date}</div>
+            <div class="flex items-center gap-3 flex-1 min-w-0">
+              <div class="text-center">
+                <div class="font-bold text-base" style="color:${rc}">${r.removed}</div>
+                <div class="text-xs mt-0.5" style="color:var(--muted)">removed</div>
+              </div>
+              <div style="color:var(--muted);font-size:20px;line-height:1">→</div>
+              <div class="text-center">
+                <div class="font-bold text-base" style="color:${ac}">${r.added}</div>
+                <div class="text-xs mt-0.5" style="color:#10b981">promoted</div>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="text-xs px-2 py-1 rounded" style="background:rgba(239,68,68,.08);color:#ef4444;border:1px solid rgba(239,68,68,.2);display:inline-block">${r.reason}</div>
+              </div>
             </div>
           </div>
+          ${hypoHtml}
         </div>`;
     }).join('');
   } catch {

@@ -572,18 +572,39 @@ def _backfill_known_swaps():
     tickers = _wl_tickers()
     dirty = False
     known = [
-        # (removed, added, reason, date)  — add entries here as needed
-        ("CRML", "LDOS", "Signal turned SELL", "2026-04-27"),
+        # Add entries here for any swaps that happened before logging was reliable
+        {"removed": "CRML", "added": "LDOS", "reason": "Signal turned SELL",
+         "date": "2026-04-27", "removed_added_date": "2026-04-24"},
     ]
     existing = {(e["removed"], e["added"]) for e in log}
-    for removed, added, reason, dt in known:
-        if removed not in tickers and added in tickers and (removed, added) not in existing:
-            log.append({"removed": removed, "added": added, "reason": reason, "date": dt})
+    for entry in known:
+        key = (entry["removed"], entry["added"])
+        if entry["removed"] not in tickers and entry["added"] in tickers and key not in existing:
+            log.append(entry)
             dirty = True
     if dirty:
         _save_replacements(log)
 
+def _enrich_replacements():
+    """Lazily fill in historical prices for log entries that are missing them."""
+    log = _load_replacements()
+    dirty = False
+    for e in log:
+        if not e.get("removed_price_at_add") and e.get("removed_added_date"):
+            p = _price_on_date(e["removed"], e["removed_added_date"])
+            if p:
+                e["removed_price_at_add"] = p
+                dirty = True
+        if not e.get("removed_price_exit") and e.get("date"):
+            p = _price_on_date(e["removed"], e["date"])
+            if p:
+                e["removed_price_exit"] = p
+                dirty = True
+    if dirty:
+        _save_replacements(log)
+
 _backfill_known_swaps()
+_enrich_replacements()
 
 # ── Exchange / Nordnet URL ────────────────────────────────────────────────────
 EXCHANGE_TO_NORDNET = {
@@ -853,10 +874,13 @@ def _check_and_refresh():
                     "price_at_add": round(repl_price, 4) if repl_price else None,
                 }
                 log.append({
-                    "removed": ticker,
-                    "added":   replacement,
-                    "reason":  reason,
-                    "date":    today,
+                    "removed":              ticker,
+                    "added":                replacement,
+                    "reason":               reason,
+                    "date":                 today,
+                    "removed_added_date":   entry.get("added_date"),
+                    "removed_price_at_add": entry.get("price_at_add"),
+                    "removed_price_exit":   round(data["price"], 4) if data.get("price") else None,
                 })
                 print(f"[auto-refresh] Replaced {ticker} → {replacement}: {reason}")
                 changed = True
