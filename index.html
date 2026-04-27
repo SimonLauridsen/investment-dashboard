@@ -308,6 +308,7 @@ let watchlistOrder = []; // ordered tickers from last /api/stocks response
 
 let watchlistData  = {};   // ticker → api response
 let customData     = {};   // ticker → api response
+let replacementsLog = [];  // full swap history from /api/replacements
 let activeTab      = 'watchlist';
 let selectedTicker = { watchlist: null, custom: null };
 let detailChartInstance = null;
@@ -612,7 +613,7 @@ function miniSparkline(id, chartData, color) {
 }
 
 // ── Card renderer (shared) ────────────────────────────────────────────────────
-function buildCard(s, tab, isCustom) {
+function buildCard(s, tab, isCustom, slotOverride) {
   const color    = tickerColor(s.ticker);
   const sym      = currSym(s.currency);
   const sig      = s.signal;
@@ -675,13 +676,14 @@ function buildCard(s, tab, isCustom) {
       <div class="text-center p-2 rounded-lg" style="background:var(--bg)"><div class="text-xs mb-1" style="color:var(--muted)">SMA50</div><div class="font-semibold text-sm" style="color:${s.price>s.sma50?'#10b981':'#ef4444'}">${s.sma50>0?sym+s.sma50.toFixed(2):'N/A'}</div></div>
     </div>
     <p class="text-xs leading-relaxed" style="color:var(--muted)">${blurb}</p>
-    ${!isCustom && s.hypo_value != null ? (() => {
-      const pct  = s.hypo_pct;
-      const val  = s.hypo_value;
+    ${!isCustom && (slotOverride || s.hypo_value != null) ? (() => {
+      const pct  = slotOverride ? slotOverride.pct       : s.hypo_pct;
+      const val  = slotOverride ? slotOverride.value      : s.hypo_value;
+      const date = slotOverride ? slotOverride.startDate  : s.added_date;
       const up   = pct >= 0;
       const clr  = up ? '#10b981' : '#ef4444';
       const sign = up ? '+' : '';
-      const sinceDate = s.added_date ? ` since ${s.added_date}` : '';
+      const sinceDate = date ? ` since ${date}` : '';
       return `<div class="flex items-center justify-between mt-2 px-2 py-1.5 rounded-lg" style="background:rgba(99,102,241,.07);border:1px solid rgba(99,102,241,.18)">
         <span class="text-xs" style="color:var(--muted)">10k DKK${sinceDate}</span>
         <span class="text-xs font-bold" style="color:${clr}">${val.toLocaleString('da-DK', {maximumFractionDigits:0})} DKK (${sign}${pct.toFixed(1)}%)</span>
@@ -697,22 +699,37 @@ function renderWatchlistGrid() {
   const stocks = watchlistOrder.map(t=>watchlistData[t]).filter(Boolean);
   if (!stocks.length) { grid.innerHTML='<div class="card p-6 text-center" style="grid-column:1/-1;color:var(--muted)">Loading...</div>'; return; }
 
-  // Hypothetical portfolio summary banner
-  const withHypo = stocks.filter(s => s.hypo_value != null);
-  if (withHypo.length) {
-    const totalInvested = withHypo.length * 10000;
-    const totalNow      = withHypo.reduce((acc, s) => acc + s.hypo_value, 0);
+  // Build compounded slot values: chain each stock's return through its predecessors
+  const predMap   = buildPredecessorMap(replacementsLog);
+  const slotData  = {}; // ticker → {value, pct, startDate}
+  for (const s of stocks) {
+    if (!s.price_at_add || !s.price) continue;
+    const pred       = predMap[s.ticker] || { multiplier: 1, slotStartDate: s.added_date };
+    const stockMult  = s.price / s.price_at_add;
+    const totalMult  = pred.multiplier * stockMult;
+    slotData[s.ticker] = {
+      value:     10000 * totalMult,
+      pct:       (totalMult - 1) * 100,
+      startDate: pred.slotStartDate || s.added_date,
+    };
+  }
+
+  // Summary banner using compounded slot values
+  const slots = Object.values(slotData);
+  if (slots.length) {
+    const totalInvested = slots.length * 10000;
+    const totalNow      = slots.reduce((a, s) => a + s.value, 0);
     const totalPct      = (totalNow - totalInvested) / totalInvested * 100;
-    const up            = totalPct >= 0;
-    const clr           = up ? '#10b981' : '#ef4444';
-    const sign          = up ? '+' : '';
-    const banner        = document.createElement('div');
+    const up   = totalPct >= 0;
+    const clr  = up ? '#10b981' : '#ef4444';
+    const sign = up ? '+' : '';
+    const banner = document.createElement('div');
     banner.style.cssText = 'grid-column:1/-1';
     banner.innerHTML = `
       <div class="card px-4 py-3 flex flex-wrap items-center justify-between gap-3" style="border:1px solid rgba(99,102,241,.25);background:rgba(99,102,241,.07)">
         <div>
           <div class="text-xs font-semibold mb-0.5" style="color:var(--muted);letter-spacing:.06em">HYPOTHETICAL PORTFOLIO — 10,000 DKK per pick at reveal</div>
-          <div class="text-xs" style="color:var(--muted)">Invested: ${totalInvested.toLocaleString('da-DK')} DKK across ${withHypo.length} picks · FX movements not included</div>
+          <div class="text-xs" style="color:var(--muted)">Invested: ${totalInvested.toLocaleString('da-DK')} DKK · compounded through swaps · FX not included</div>
         </div>
         <div class="text-right">
           <div class="text-xl font-bold" style="color:${clr}">${totalNow.toLocaleString('da-DK', {maximumFractionDigits:0})} DKK</div>
@@ -723,7 +740,7 @@ function renderWatchlistGrid() {
   }
 
   stocks.forEach(s => {
-    const card = buildCard(s, 'watchlist', false);
+    const card = buildCard(s, 'watchlist', false, slotData[s.ticker]);
     grid.appendChild(card);
     requestAnimationFrame(()=>miniSparkline(`spark-watchlist-${s.ticker}`, s.chart_data, tickerColor(s.ticker)));
   });
@@ -1132,11 +1149,30 @@ function updatePeakPrices() {
 }
 
 // ── Main refresh ──────────────────────────────────────────────────────────────
+// Returns a map of ticker → {multiplier, slotStartDate} based on swap history.
+// Multiplier > 1 means the slot made money before this ticker was promoted.
+function buildPredecessorMap(log) {
+  const info = {};
+  const sorted = [...log].sort((a, b) => a.date < b.date ? -1 : 1);
+  for (const e of sorted) {
+    if (!e.removed_price_at_add || !e.removed_price_exit) continue;
+    const prevMult      = info[e.removed]?.multiplier    || 1;
+    const prevStartDate = info[e.removed]?.slotStartDate || e.removed_added_date || e.date;
+    const removedReturn = e.removed_price_exit / e.removed_price_at_add;
+    info[e.added] = { multiplier: prevMult * removedReturn, slotStartDate: prevStartDate };
+  }
+  return info;
+}
+
 async function refreshAll() {
   try {
-    // Watchlist
-    const res = await fetch(`${API}/api/stocks`);
+    // Watchlist + replacement log (needed for compounded hypo calculation)
+    const [res, repRes] = await Promise.all([
+      fetch(`${API}/api/stocks`),
+      fetch(`${API}/api/replacements`),
+    ]);
     const stocks = await res.json();
+    replacementsLog = await repRes.json().catch(() => []);
     watchlistOrder = stocks.filter(s=>!s.error).map(s=>s.ticker);
     stocks.forEach(s=>{ if(!s.error) watchlistData[s.ticker]=s; });
     await renderReplacements();
