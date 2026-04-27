@@ -517,8 +517,14 @@ def _load_watchlist() -> list:
     result = []
     for item in raw:
         if isinstance(item, str):
-            result.append({"ticker": item, "added_date": today, "price_at_add": None})
+            # Original 6 picks were live from 2026-04-24 (initial commit date)
+            launch_date = "2026-04-24" if item in STOCKS else today
+            result.append({"ticker": item, "added_date": launch_date, "price_at_add": None})
         else:
+            # Correct added_date for original picks that were migrated with today's date
+            if item.get("ticker") in STOCKS and item.get("added_date", "") > "2026-04-24":
+                item["added_date"] = "2026-04-24"
+                item["price_at_add"] = None  # force re-lookup at correct date
             result.append(item)
     return result
 
