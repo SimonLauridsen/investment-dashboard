@@ -501,26 +501,47 @@ WATCHLIST_FILE    = Path("watchlist.json")
 REPLACEMENTS_FILE = Path("replacements.json")
 
 def _load_watchlist() -> list:
+    raw = None
     if _gist_enabled():
         with _gist_lock:
-            saved = _gist_cache.get("watchlist.json")
-        if isinstance(saved, list) and saved:
-            return saved
+            raw = _gist_cache.get("watchlist.json")
     else:
         try:
             if WATCHLIST_FILE.exists():
-                saved = json.loads(WATCHLIST_FILE.read_text())
-                if isinstance(saved, list) and saved:
-                    return saved
+                raw = json.loads(WATCHLIST_FILE.read_text())
         except Exception:
             pass
-    return list(STOCKS.keys())
+    if not isinstance(raw, list) or not raw:
+        raw = list(STOCKS.keys())
+    today = date.today().isoformat()
+    result = []
+    for item in raw:
+        if isinstance(item, str):
+            result.append({"ticker": item, "added_date": today, "price_at_add": None})
+        else:
+            result.append(item)
+    return result
 
 def _save_watchlist(wl: list):
     if _gist_enabled():
         _gist_write("watchlist.json", wl)
     else:
         WATCHLIST_FILE.write_text(json.dumps(wl))
+
+def _wl_tickers() -> list:
+    return [e["ticker"] for e in ACTIVE_WATCHLIST]
+
+def _price_on_date(ticker: str, date_str: str) -> float:
+    try:
+        from datetime import timedelta
+        start = date.fromisoformat(date_str)
+        end   = start + timedelta(days=5)
+        hist  = yf.Ticker(ticker).history(start=str(start), end=str(end))
+        if not hist.empty:
+            return round(float(hist["Close"].iloc[0]), 4)
+    except Exception:
+        pass
+    return 0.0
 
 def _load_replacements() -> list:
     if _gist_enabled():
@@ -697,12 +718,34 @@ def get_stock(ticker: str):
 
 @app.get("/api/stocks")
 def get_all_stocks():
+    global ACTIVE_WATCHLIST
     results = []
-    for t in ACTIVE_WATCHLIST:
+    wl_changed = False
+    for entry in ACTIVE_WATCHLIST:
+        ticker = entry["ticker"]
         try:
-            results.append(_fetch_stock_data(t))
+            data = _fetch_stock_data(ticker)
+            if data.get("error"):
+                results.append(data)
+                continue
+            # Lazily record price_at_add on first fetch after a stock is added
+            if not entry.get("price_at_add"):
+                p = _price_on_date(ticker, entry["added_date"]) or data["price"]
+                entry["price_at_add"] = round(p, 4)
+                wl_changed = True
+            p0 = entry["price_at_add"]
+            p1 = data["price"]
+            hypo_pct   = round((p1 - p0) / p0 * 100, 2) if p0 else 0.0
+            hypo_value = round(10000 * (1 + hypo_pct / 100), 2)
+            data["added_date"]   = entry["added_date"]
+            data["price_at_add"] = p0
+            data["hypo_pct"]     = hypo_pct
+            data["hypo_value"]   = hypo_value
+            results.append(data)
         except Exception as e:
-            results.append({"error": str(e), "ticker": t})
+            results.append({"error": str(e), "ticker": ticker})
+    if wl_changed:
+        _save_watchlist(ACTIVE_WATCHLIST)
     return results
 
 @app.get("/api/replacements")
@@ -729,10 +772,10 @@ def serve_index():
     return FileResponse("index.html")
 
 # ── Auto-refresh watchlist ────────────────────────────────────────────────────
-def _best_replacement(exclude: list) -> str | None:
-    best_ticker, best_score = None, -99
+def _best_replacement(exclude_tickers: list) -> tuple[str | None, float]:
+    best_ticker, best_score, best_price = None, -99, 0.0
     for ticker in CANDIDATE_POOL:
-        if ticker in exclude:
+        if ticker in exclude_tickers:
             continue
         try:
             data = _fetch_stock_data(ticker)
@@ -740,11 +783,14 @@ def _best_replacement(exclude: list) -> str | None:
                 continue
             score = data["signal"]["score"]
             if score > best_score:
-                best_score = score
+                best_score  = score
                 best_ticker = ticker
+                best_price  = data.get("price", 0.0)
         except Exception:
             continue
-    return best_ticker if best_score >= 1 else None  # only promote BUY or better
+    if best_score >= 1:
+        return best_ticker, best_price
+    return None, 0.0
 
 def _check_and_refresh():
     global ACTIVE_WATCHLIST
@@ -752,7 +798,8 @@ def _check_and_refresh():
     log = _load_replacements()
     changed = False
 
-    for ticker in ACTIVE_WATCHLIST[:]:
+    for i, entry in enumerate(ACTIVE_WATCHLIST[:]):
+        ticker = entry["ticker"]
         try:
             data = _fetch_stock_data(ticker)
         except Exception:
@@ -772,15 +819,19 @@ def _check_and_refresh():
                 reason = f"Catalyst date {cat_date} passed — signal is {signal}"
 
         if reason:
-            replacement = _best_replacement(ACTIVE_WATCHLIST)
+            current_tickers = _wl_tickers()
+            replacement, repl_price = _best_replacement(current_tickers)
             if replacement:
-                idx = ACTIVE_WATCHLIST.index(ticker)
-                ACTIVE_WATCHLIST[idx] = replacement
+                ACTIVE_WATCHLIST[i] = {
+                    "ticker":       replacement,
+                    "added_date":   today,
+                    "price_at_add": round(repl_price, 4) if repl_price else None,
+                }
                 log.append({
                     "removed": ticker,
-                    "added": replacement,
-                    "reason": reason,
-                    "date": today,
+                    "added":   replacement,
+                    "reason":  reason,
+                    "date":    today,
                 })
                 print(f"[auto-refresh] Replaced {ticker} → {replacement}: {reason}")
                 changed = True
