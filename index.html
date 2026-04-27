@@ -1125,14 +1125,15 @@ function normDate(s) {
 }
 
 function isNordnetBuy(type) {
+  // KØBT (Danish), KJØPT (Norwegian), KÖPT (Swedish), KØB/KÖP/KJØP (present-tense variants)
   const t = (type || '').trim();
-  return /^k.{0,2}[bp]$/i.test(t) || t.toUpperCase() === 'BUY';
+  return /^k(j?[øöo][bp])t?$/i.test(t) || t.toUpperCase() === 'BUY';
 }
 
 function isNordnetSell(type) {
-  // SALG (Danish/Norwegian), SÄLJ (Swedish)
+  // SOLGT (Danish/Norwegian), SALG, SÄLJ (Swedish), SÅLT (Swedish past tense)
   const t = (type || '').trim();
-  return /^s.l[gj]$/i.test(t) || t.toUpperCase() === 'SELL';
+  return /^s(olgt?|alg|älj|ålt)$/i.test(t) || t.toUpperCase() === 'SELL';
 }
 
 function processNordnetCSV(text) {
