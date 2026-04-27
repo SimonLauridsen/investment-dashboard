@@ -1147,9 +1147,10 @@ function processNordnetCSV(text) {
     name:    headers.findIndex(h => h.includes('rdipapir') || h.includes('papirer') || h.includes('instrument') || h === 'navn'),
     isin:    headers.findIndex(h => h === 'isin'),
     antal:   headers.findIndex(h => h === 'antal'),
-    kurs:    headers.findIndex(h => h === 'kurs'),
-    totalt:  headers.findIndex(h => h.includes('totalt antal')),
-    date:    headers.findIndex(h => h.includes('handelsdag') || h.includes('gf')),
+    kurs:       headers.findIndex(h => h === 'kurs'),
+    totalt:     headers.findIndex(h => h.includes('totalt antal')),
+    date:       headers.findIndex(h => h.includes('handelsdag') || h.includes('gf')),
+    middelkurs: headers.findIndex(h => h === 'middelkurs'),
   };
 
   if (idx.isin < 0) {
@@ -1169,7 +1170,8 @@ function processNordnetCSV(text) {
       isin,
       antal:   parseNN(idx.antal   >= 0 ? c[idx.antal]   : '0'),
       kurs:    parseNN(idx.kurs    >= 0 ? c[idx.kurs]    : '0'),
-      totalt:  idx.totalt >= 0 && c[idx.totalt] && c[idx.totalt].trim() !== '' ? parseNN(c[idx.totalt]) : null,
+      totalt:     idx.totalt     >= 0 && c[idx.totalt]     && c[idx.totalt].trim()     !== '' ? parseNN(c[idx.totalt])     : null,
+      middelkurs: idx.middelkurs >= 0 && c[idx.middelkurs] && c[idx.middelkurs].trim() !== '' ? parseNN(c[idx.middelkurs]) : 0,
     });
   }
   console.log(`[NN] ${rows.length} data rows parsed. Unique ISINs: ${[...new Set(rows.map(r=>r.isin))].length}`);
@@ -1180,16 +1182,25 @@ function processNordnetCSV(text) {
   // Group by ISIN
   const byISIN = {};
   for (const r of rows) {
-    if (!byISIN[r.isin]) byISIN[r.isin] = { name: r.name, isin: r.isin, totalAntal: 0, hasTypedRows: false, latestPosTotalt: null, latestPosTotaltDate: '' };
+    if (!byISIN[r.isin]) byISIN[r.isin] = { name: r.name, isin: r.isin, totalAntal: 0, hasTypedRows: false, latestPosTotalt: null, latestPosTotaltDate: '', latestBuyDate: '', latestMiddelkurs: 0 };
     const g = byISIN[r.isin];
     if (r.name && r.name !== r.isin && g.name === r.isin) g.name = r.name;
 
-    // Primary: type-based sum (buy adds, sell subtracts)
     const qty = Math.abs(r.antal);
-    if (isNordnetBuy(r.type))       { g.totalAntal += qty; g.hasTypedRows = true; }
-    else if (isNordnetSell(r.type)) { g.totalAntal -= qty; g.hasTypedRows = true; }
+    if (isNordnetBuy(r.type)) {
+      g.totalAntal += qty;
+      g.hasTypedRows = true;
+      // Middelkurs on the most recent KØBT row = Nordnet's running GAV per share
+      if (r.middelkurs > 0 && r.date >= g.latestBuyDate) {
+        g.latestBuyDate    = r.date;
+        g.latestMiddelkurs = r.middelkurs;
+      }
+    } else if (isNordnetSell(r.type)) {
+      g.totalAntal -= qty;
+      g.hasTypedRows = true;
+    }
 
-    // Fallback: track the latest positive totalt (UDBYTTE rows have totalt=0 so they're naturally excluded)
+    // Fallback share count: latest positive totalt (UDBYTTE rows have totalt=0, naturally excluded)
     if (r.totalt > 0 && r.date >= g.latestPosTotaltDate) {
       g.latestPosTotaltDate = r.date;
       g.latestPosTotalt = r.totalt;
@@ -1204,12 +1215,15 @@ function processNordnetCSV(text) {
     // the latest positive totalt antal (excludes dividend rows which always have totalt=0)
     const shares = g.hasTypedRows ? g.totalAntal : (g.latestPosTotalt ?? 0);
 
-    // GAV = weighted average of kurs across actual purchase transactions only.
-    // Must filter by type to exclude UDBYTTE rows (which also have antal>0 and kurs>0).
-    const buyRows = rows.filter(r => r.isin === isin && isNordnetBuy(r.type) && r.antal > 0 && r.kurs > 0);
-    let tv = 0, ts = 0;
-    for (const r of buyRows) { tv += r.antal * r.kurs; ts += r.antal; }
-    const avgPrice = ts > 0 ? tv / ts : 0;
+    // GAV: prefer Nordnet's own middelkurs from the most recent KØBT row (already accounts
+    // for partial sells and cost averaging). Fall back to weighted average if not available.
+    let avgPrice = g.latestMiddelkurs;
+    if (!avgPrice) {
+      const buyRows = rows.filter(r => r.isin === isin && isNordnetBuy(r.type) && r.antal > 0 && r.kurs > 0);
+      let tv = 0, ts = 0;
+      for (const r of buyRows) { tv += r.antal * r.kurs; ts += r.antal; }
+      avgPrice = ts > 0 ? tv / ts : 0;
+    }
 
     const kept = shares > 0.0001;
     const src = g.hasTypedRows ? 'type-sum' : 'totalt-fallback';
