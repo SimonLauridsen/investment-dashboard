@@ -86,6 +86,7 @@
         <span class="text-xs" style="color:var(--muted)" id="last-update">Connecting...</span>
       </div>
       <button onclick="refreshAll()" class="px-3 py-1.5 rounded-lg text-xs font-medium" style="background:var(--border);color:var(--text)">Refresh</button>
+      <button onclick="triggerWatchlistSwap()" id="swap-btn" class="px-3 py-1.5 rounded-lg text-xs font-medium" style="background:rgba(99,102,241,.15);color:#a78bfa;border:1px solid rgba(99,102,241,.3)" title="Check signals now and replace any SELL-rated picks">⚡ Swap now</button>
       <form method="post" action="/logout" style="display:inline;margin:0">
         <button type="submit" class="px-3 py-1.5 rounded-lg text-xs font-medium" style="background:transparent;border:1px solid var(--border);color:var(--muted);cursor:pointer">Sign out</button>
       </form>
@@ -1081,6 +1082,21 @@ async function renderReplacements() {
         <span style="color:var(--muted);opacity:.6">${r.date}</span>
       </div>`).join('<hr style="border-color:var(--border);margin:4px 0">');
   } catch {}
+}
+
+// ── Manual watchlist swap trigger ────────────────────────────────────────────
+async function triggerWatchlistSwap() {
+  const btn = document.getElementById('swap-btn');
+  btn.disabled = true;
+  btn.textContent = 'Checking…';
+  try {
+    await fetch(`${API}/api/refresh-watchlist`, { method: 'POST' });
+    // Give the background check a few seconds to complete, then refresh
+    await new Promise(r => setTimeout(r, 4000));
+    await refreshAll();
+  } catch {}
+  btn.disabled = false;
+  btn.textContent = '⚡ Swap now';
 }
 
 // ── History tab ───────────────────────────────────────────────────────────────

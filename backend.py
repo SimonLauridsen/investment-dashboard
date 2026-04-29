@@ -772,7 +772,12 @@ def get_stock(ticker: str):
 
 @app.get("/api/stocks")
 def get_all_stocks():
-    global ACTIVE_WATCHLIST
+    global ACTIVE_WATCHLIST, _last_refresh_ts
+    import time
+    # Trigger a swap check in the background if it hasn't run in the last hour
+    if time.time() - _last_refresh_ts > 3600:
+        _last_refresh_ts = time.time()  # mark immediately to avoid parallel triggers
+        threading.Thread(target=_check_and_refresh, daemon=True).start()
     results = []
     wl_changed = False
     for entry in ACTIVE_WATCHLIST:
@@ -847,7 +852,9 @@ def _best_replacement(exclude_tickers: list) -> tuple[str | None, float]:
     return None, 0.0
 
 def _check_and_refresh():
-    global ACTIVE_WATCHLIST
+    global ACTIVE_WATCHLIST, _last_refresh_ts
+    import time
+    _last_refresh_ts = time.time()
     today = date.today().isoformat()
     log = _load_replacements()
     changed = False
@@ -897,17 +904,25 @@ def _check_and_refresh():
         _save_watchlist(ACTIVE_WATCHLIST)
         _save_replacements(log)
 
+_last_refresh_ts = 0.0  # unix timestamp of last completed _check_and_refresh
+
 def _auto_refresh_loop():
     import time
-    time.sleep(300)  # wait 5 min after startup before first check
+    time.sleep(60)  # short startup delay so first check fires quickly
     while True:
         try:
             _check_and_refresh()
         except Exception as e:
             print(f"[auto-refresh] Error: {e}")
-        time.sleep(86400)  # recheck every 24 hours
+        time.sleep(3600)  # recheck every hour
 
 threading.Thread(target=_auto_refresh_loop, daemon=True).start()
+
+@app.post("/api/refresh-watchlist")
+def force_refresh_watchlist():
+    """Manually trigger a watchlist swap check."""
+    threading.Thread(target=_check_and_refresh, daemon=True).start()
+    return {"status": "refresh triggered"}
 
 if __name__ == "__main__":
     import uvicorn
