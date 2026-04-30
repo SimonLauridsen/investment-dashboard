@@ -588,6 +588,17 @@ def _backfill_known_swaps():
     if len(log) < before:
         dirty = True
 
+    # Deduplicate by (removed, added) — keep entry with the most fields filled in
+    seen: dict = {}
+    for e in log:
+        key = (e.get("removed"), e.get("added"))
+        if key not in seen or sum(bool(v) for v in e.values()) > sum(bool(v) for v in seen[key].values()):
+            seen[key] = e
+    deduped = list(seen.values())
+    if len(deduped) < len(log):
+        log = deduped
+        dirty = True
+
     # ── 2. Upsert entries we know are correct ─────────────────────────────────
     known = [
         {"removed": "CRML",    "added": "LDOS",      "reason": "Signal turned SELL",
