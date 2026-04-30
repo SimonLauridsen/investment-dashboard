@@ -572,23 +572,32 @@ def _backfill_known_swaps():
     tickers = set(_wl_tickers())
     dirty = False
 
-    # ── 1. Remove bogus entries caused by race conditions or wrong backfills ──
-    bogus_added   = {"COLO-B.CO"}
-    bogus_pairs   = {("DSV.CO", "ALFA.ST")}
+    # ── 1. Remove all known-wrong entries ─────────────────────────────────────
+    # ASML.AS→DSV.CO: wrong backfill — real swap was ASML.AS→COLO-B.CO (Thread 1 won)
+    # All RGTI/NEL.OL pairs: auto-detect cartesian-product artifacts
+    wrong_pairs = {
+        ("ASML.AS", "DSV.CO"),
+        ("DSV.CO",  "ALFA.ST"),
+        ("RGTI",    "ALFA.ST"),
+        ("RGTI",    "COLO-B.CO"),
+        ("NEL.OL",  "ALFA.ST"),
+        ("NEL.OL",  "COLO-B.CO"),
+    }
     before = len(log)
-    log = [e for e in log
-           if e.get("added") not in bogus_added
-           and (e.get("removed"), e.get("added")) not in bogus_pairs]
+    log = [e for e in log if (e.get("removed"), e.get("added")) not in wrong_pairs]
     if len(log) < before:
         dirty = True
 
     # ── 2. Upsert entries we know are correct ─────────────────────────────────
     known = [
-        {"removed": "CRML",    "added": "LDOS",   "reason": "Signal turned SELL",
+        {"removed": "CRML",    "added": "LDOS",      "reason": "Signal turned SELL",
          "date": "2026-04-27", "removed_added_date": "2026-04-24"},
-        {"removed": "ASML.AS", "added": "DSV.CO", "reason": "Signal turned SELL",
+        # COLO-B.CO is currently in the watchlist → ASML.AS→COLO-B.CO was the real swap
+        {"removed": "ASML.AS", "added": "COLO-B.CO", "reason": "Signal turned SELL",
          "date": "2026-04-29", "removed_added_date": "2026-04-24"},
-        # DSV.CO → ORSTED.CO was auto-logged correctly — no entry needed here
+        # DSV.CO→ORSTED.CO auto-logged correctly — no entry needed
+        # RGTI/NEL.OL: one led to DSV.CO chain, other to ALFA.ST — cannot
+        # determine pairing without live Gist data, so we skip to avoid wrong entries
     ]
     existing = {(e["removed"], e["added"]): i for i, e in enumerate(log)}
     for entry in known:
@@ -604,30 +613,32 @@ def _backfill_known_swaps():
                         log[idx][field] = value
                         dirty = True
 
-    # ── 3. Auto-detect stocks silently removed without a log entry ────────────
-    ever_active  = set(STOCKS.keys()) | {e["added"] for e in log}
-    has_removal  = {e["removed"] for e in log}
-    ghost_removed = ever_active - tickers - has_removal   # was active, now gone, no log
-
+    # ── 3. Auto-detect ONLY when exactly one stock is missing on each side ────
+    ever_active   = set(STOCKS.keys()) | {e["added"] for e in log}
+    has_removal   = {e["removed"] for e in log}
+    ghost_removed = ever_active - tickers - has_removal
     log_added     = {e["added"] for e in log}
-    ghost_added   = (tickers - set(STOCKS.keys())) - log_added  # current, not original, no log
+    ghost_added   = (tickers - set(STOCKS.keys())) - log_added
 
-    for removed in ghost_removed:
-        for added in ghost_added:
-            # Best-guess added_date for the removed stock
-            removed_added_date = next(
-                (e.get("date") for e in log if e.get("added") == removed),
-                "2026-04-24" if removed in STOCKS else None
-            )
-            log.append({
-                "removed":            removed,
-                "added":              added,
-                "reason":             "Signal turned SELL",
-                "date":               date.today().isoformat(),
-                "removed_added_date": removed_added_date,
-            })
-            print(f"[backfill] Auto-detected missing swap: {removed} → {added}")
-            dirty = True
+    if len(ghost_removed) == 1 and len(ghost_added) == 1:
+        removed = next(iter(ghost_removed))
+        added   = next(iter(ghost_added))
+        removed_added_date = next(
+            (e.get("date") for e in log if e.get("added") == removed),
+            "2026-04-24" if removed in STOCKS else None,
+        )
+        log.append({
+            "removed":            removed,
+            "added":              added,
+            "reason":             "Signal turned SELL",
+            "date":               date.today().isoformat(),
+            "removed_added_date": removed_added_date,
+        })
+        print(f"[backfill] Auto-detected 1:1 missing swap: {removed} → {added}")
+        dirty = True
+    elif ghost_removed or ghost_added:
+        print(f"[backfill] Ambiguous history, skipping auto-detect — "
+              f"ghost removed: {ghost_removed}, ghost added: {ghost_added}")
 
     if dirty:
         _save_replacements(log)
