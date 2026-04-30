@@ -573,12 +573,12 @@ def _backfill_known_swaps():
     dirty = False
 
     # ── 1. Remove all known-wrong entries ─────────────────────────────────────
-    # ASML.AS→DSV.CO: wrong backfill — real swap was ASML.AS→COLO-B.CO (Thread 1 won)
-    # All RGTI/NEL.OL pairs: auto-detect cartesian-product artifacts
+    # ASML.AS→DSV.CO: wrong backfill — real swap was ASML.AS→COLO-B.CO
+    # DSV.CO→ALFA.ST: wrong — real swap was DSV.CO→ORSTED.CO (auto-logged)
+    # RGTI→COLO-B.CO, NEL.OL→ALFA.ST, NEL.OL→COLO-B.CO: cartesian-product artifacts
     wrong_pairs = {
         ("ASML.AS", "DSV.CO"),
         ("DSV.CO",  "ALFA.ST"),
-        ("RGTI",    "ALFA.ST"),
         ("RGTI",    "COLO-B.CO"),
         ("NEL.OL",  "ALFA.ST"),
         ("NEL.OL",  "COLO-B.CO"),
@@ -592,12 +592,14 @@ def _backfill_known_swaps():
     known = [
         {"removed": "CRML",    "added": "LDOS",      "reason": "Signal turned SELL",
          "date": "2026-04-27", "removed_added_date": "2026-04-24"},
+        {"removed": "NEL.OL",  "added": "DSV.CO",    "reason": "Signal turned SELL",
+         "date": "2026-04-28", "removed_added_date": "2026-04-24"},
         # COLO-B.CO is currently in the watchlist → ASML.AS→COLO-B.CO was the real swap
         {"removed": "ASML.AS", "added": "COLO-B.CO", "reason": "Signal turned SELL",
          "date": "2026-04-29", "removed_added_date": "2026-04-24"},
+        {"removed": "RGTI",    "added": "ALFA.ST",   "reason": "Signal turned SELL",
+         "date": "2026-04-30", "removed_added_date": "2026-04-24"},
         # DSV.CO→ORSTED.CO auto-logged correctly — no entry needed
-        # RGTI/NEL.OL: one led to DSV.CO chain, other to ALFA.ST — cannot
-        # determine pairing without live Gist data, so we skip to avoid wrong entries
     ]
     existing = {(e["removed"], e["added"]): i for i, e in enumerate(log)}
     for entry in known:
