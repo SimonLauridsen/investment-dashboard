@@ -569,29 +569,31 @@ ACTIVE_WATCHLIST = _load_watchlist()
 def _backfill_known_swaps():
     """Seed/correct replacement log entries that predate reliable logging."""
     log = _load_replacements()
-    tickers = _wl_tickers()
+    tickers = set(_wl_tickers())
     dirty = False
 
-    # Remove bogus entries caused by race conditions or wrong backfills
-    bogus = {("COLO-B.CO",), ("DSV.CO", "ALFA.ST")}  # (added,) or (removed, added)
+    # ── 1. Remove bogus entries caused by race conditions or wrong backfills ──
+    bogus_added   = {"COLO-B.CO"}
+    bogus_pairs   = {("DSV.CO", "ALFA.ST")}
     before = len(log)
-    log = [e for e in log if
-           e.get("added") not in {b[0] for b in bogus if len(b) == 1} and
-           (e.get("removed"), e.get("added")) not in {b for b in bogus if len(b) == 2}]
+    log = [e for e in log
+           if e.get("added") not in bogus_added
+           and (e.get("removed"), e.get("added")) not in bogus_pairs]
     if len(log) < before:
         dirty = True
 
+    # ── 2. Upsert entries we know are correct ─────────────────────────────────
     known = [
-        {"removed": "CRML",    "added": "LDOS",      "reason": "Signal turned SELL",
+        {"removed": "CRML",    "added": "LDOS",   "reason": "Signal turned SELL",
          "date": "2026-04-27", "removed_added_date": "2026-04-24"},
-        {"removed": "ASML.AS", "added": "DSV.CO",    "reason": "Signal turned SELL",
+        {"removed": "ASML.AS", "added": "DSV.CO", "reason": "Signal turned SELL",
          "date": "2026-04-29", "removed_added_date": "2026-04-24"},
-        # DSV.CO → ORSTED.CO was logged correctly by the auto-refresh — no backfill needed
+        # DSV.CO → ORSTED.CO was auto-logged correctly — no entry needed here
     ]
     existing = {(e["removed"], e["added"]): i for i, e in enumerate(log)}
     for entry in known:
         key = (entry["removed"], entry["added"])
-        if entry["removed"] not in tickers:  # confirmed: that stock is no longer active
+        if entry["removed"] not in tickers:
             if key not in existing:
                 log.append(entry)
                 dirty = True
@@ -601,6 +603,32 @@ def _backfill_known_swaps():
                     if log[idx].get(field) != value:
                         log[idx][field] = value
                         dirty = True
+
+    # ── 3. Auto-detect stocks silently removed without a log entry ────────────
+    ever_active  = set(STOCKS.keys()) | {e["added"] for e in log}
+    has_removal  = {e["removed"] for e in log}
+    ghost_removed = ever_active - tickers - has_removal   # was active, now gone, no log
+
+    log_added     = {e["added"] for e in log}
+    ghost_added   = (tickers - set(STOCKS.keys())) - log_added  # current, not original, no log
+
+    for removed in ghost_removed:
+        for added in ghost_added:
+            # Best-guess added_date for the removed stock
+            removed_added_date = next(
+                (e.get("date") for e in log if e.get("added") == removed),
+                "2026-04-24" if removed in STOCKS else None
+            )
+            log.append({
+                "removed":            removed,
+                "added":              added,
+                "reason":             "Signal turned SELL",
+                "date":               date.today().isoformat(),
+                "removed_added_date": removed_added_date,
+            })
+            print(f"[backfill] Auto-detected missing swap: {removed} → {added}")
+            dirty = True
+
     if dirty:
         _save_replacements(log)
 
