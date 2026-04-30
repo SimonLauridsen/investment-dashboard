@@ -572,19 +572,21 @@ def _backfill_known_swaps():
     tickers = _wl_tickers()
     dirty = False
 
-    # Remove bogus entries caused by a race condition (COLO-B.CO was never promoted)
+    # Remove bogus entries caused by race conditions or wrong backfills
+    bogus = {("COLO-B.CO",), ("DSV.CO", "ALFA.ST")}  # (added,) or (removed, added)
     before = len(log)
-    log = [e for e in log if e.get("added") != "COLO-B.CO"]
+    log = [e for e in log if
+           e.get("added") not in {b[0] for b in bogus if len(b) == 1} and
+           (e.get("removed"), e.get("added")) not in {b for b in bogus if len(b) == 2}]
     if len(log) < before:
         dirty = True
 
     known = [
-        {"removed": "CRML",    "added": "LDOS",    "reason": "Signal turned SELL",
+        {"removed": "CRML",    "added": "LDOS",      "reason": "Signal turned SELL",
          "date": "2026-04-27", "removed_added_date": "2026-04-24"},
-        {"removed": "ASML.AS", "added": "DSV.CO",  "reason": "Signal turned SELL",
+        {"removed": "ASML.AS", "added": "DSV.CO",    "reason": "Signal turned SELL",
          "date": "2026-04-29", "removed_added_date": "2026-04-24"},
-        {"removed": "DSV.CO",  "added": "ALFA.ST", "reason": "Signal turned SELL",
-         "date": "2026-04-30", "removed_added_date": "2026-04-29"},
+        # DSV.CO → ORSTED.CO was logged correctly by the auto-refresh — no backfill needed
     ]
     existing = {(e["removed"], e["added"]): i for i, e in enumerate(log)}
     for entry in known:
