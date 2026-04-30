@@ -50,11 +50,14 @@ def _gist_fetch_all():
     except Exception as e:
         print(f"[gist] Startup fetch failed: {e}")
 
-def _gist_push(filename: str, data):
+def _gist_push(files: dict):
+    """Push one or more files to the Gist in a single PATCH request."""
     if not _gist_enabled():
         return
     try:
-        payload = json.dumps({"files": {filename: {"content": json.dumps(data)}}}).encode()
+        payload = json.dumps({
+            "files": {name: {"content": json.dumps(data)} for name, data in files.items()}
+        }).encode()
         req = urllib.request.Request(
             f"https://api.github.com/gists/{GIST_ID}",
             data=payload, method="PATCH",
@@ -68,13 +71,20 @@ def _gist_push(filename: str, data):
         with urllib.request.urlopen(req, timeout=15):
             pass
     except Exception as e:
-        print(f"[gist] Push failed for {filename}: {e}")
+        print(f"[gist] Push failed for {list(files)}: {e}")
 
 def _gist_write(filename: str, data):
     """Update in-memory cache immediately; push to Gist in background."""
     with _gist_lock:
         _gist_cache[filename] = data
-    threading.Thread(target=_gist_push, args=(filename, data), daemon=True).start()
+    threading.Thread(target=_gist_push, args=({filename: data},), daemon=True).start()
+
+def _gist_write_multi(files: dict):
+    """Atomically write multiple files to the Gist in one request."""
+    with _gist_lock:
+        for name, data in files.items():
+            _gist_cache[name] = data
+    threading.Thread(target=_gist_push, args=(files,), daemon=True).start()
 
 # -- Password hashing (stdlib only, no bcrypt dependency) ----------------------
 def _hash_pw(pw: str) -> str:
@@ -976,8 +986,14 @@ def _do_check_and_refresh():
                 changed = True
 
     if changed:
-        _save_watchlist(ACTIVE_WATCHLIST)
-        _save_replacements(log)
+        trimmed_log = log[-20:]
+        _gist_write_multi({
+            "watchlist.json":    ACTIVE_WATCHLIST,
+            "replacements.json": trimmed_log,
+        })
+        if not _gist_enabled():
+            WATCHLIST_FILE.write_text(json.dumps(ACTIVE_WATCHLIST))
+            REPLACEMENTS_FILE.write_text(json.dumps(trimmed_log))
 
 def _auto_refresh_loop():
     import time
