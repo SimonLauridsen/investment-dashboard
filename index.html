@@ -1110,7 +1110,7 @@ async function renderHistoryLog() {
       el.innerHTML = '<div class="card p-6 text-center" style="color:var(--muted)">No replacements yet — the watchlist has not changed since launch.</div>';
       return;
     }
-    const items = [...log].reverse();
+    const items = [...log].sort((a, b) => b.date > a.date ? 1 : b.date < a.date ? -1 : 0);
     el.innerHTML = items.map((r, i) => {
       const rc = tickerColor(r.removed);
       const ac = tickerColor(r.added);
