@@ -567,24 +567,33 @@ def _save_replacements(log: list):
 ACTIVE_WATCHLIST = _load_watchlist()
 
 def _backfill_known_swaps():
-    """Seed/correct replacement log entries that predate the logging mechanism."""
+    """Seed/correct replacement log entries that predate reliable logging."""
     log = _load_replacements()
     tickers = _wl_tickers()
     dirty = False
+
+    # Remove bogus entries caused by a race condition (COLO-B.CO was never promoted)
+    before = len(log)
+    log = [e for e in log if e.get("added") != "COLO-B.CO"]
+    if len(log) < before:
+        dirty = True
+
     known = [
-        # Add entries here for any swaps that happened before logging was reliable
-        {"removed": "CRML", "added": "LDOS", "reason": "Signal turned SELL",
+        {"removed": "CRML",    "added": "LDOS",    "reason": "Signal turned SELL",
          "date": "2026-04-27", "removed_added_date": "2026-04-24"},
+        {"removed": "ASML.AS", "added": "DSV.CO",  "reason": "Signal turned SELL",
+         "date": "2026-04-29", "removed_added_date": "2026-04-24"},
+        {"removed": "DSV.CO",  "added": "ALFA.ST", "reason": "Signal turned SELL",
+         "date": "2026-04-30", "removed_added_date": "2026-04-29"},
     ]
     existing = {(e["removed"], e["added"]): i for i, e in enumerate(log)}
     for entry in known:
         key = (entry["removed"], entry["added"])
-        if entry["removed"] not in tickers and entry["added"] in tickers:
+        if entry["removed"] not in tickers:  # confirmed: that stock is no longer active
             if key not in existing:
                 log.append(entry)
                 dirty = True
             else:
-                # Correct/fill any wrong or missing fields in the existing entry
                 idx = existing[key]
                 for field, value in entry.items():
                     if log[idx].get(field) != value:
@@ -831,6 +840,9 @@ def serve_index():
     return FileResponse("index.html")
 
 # ── Auto-refresh watchlist ────────────────────────────────────────────────────
+_last_refresh_ts = 0.0           # unix timestamp of last completed check
+_refresh_lock    = threading.Lock()  # prevents concurrent swap checks
+
 def _best_replacement(exclude_tickers: list) -> tuple[str | None, float]:
     best_ticker, best_score, best_price = None, -99, 0.0
     for ticker in CANDIDATE_POOL:
@@ -852,6 +864,15 @@ def _best_replacement(exclude_tickers: list) -> tuple[str | None, float]:
     return None, 0.0
 
 def _check_and_refresh():
+    if not _refresh_lock.acquire(blocking=False):
+        print("[auto-refresh] Skipped — already running")
+        return
+    try:
+        _do_check_and_refresh()
+    finally:
+        _refresh_lock.release()
+
+def _do_check_and_refresh():
     global ACTIVE_WATCHLIST, _last_refresh_ts
     import time
     _last_refresh_ts = time.time()
@@ -903,8 +924,6 @@ def _check_and_refresh():
     if changed:
         _save_watchlist(ACTIVE_WATCHLIST)
         _save_replacements(log)
-
-_last_refresh_ts = 0.0  # unix timestamp of last completed _check_and_refresh
 
 def _auto_refresh_loop():
     import time
