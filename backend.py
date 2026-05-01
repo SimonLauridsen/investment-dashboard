@@ -913,7 +913,7 @@ _refresh_lock    = threading.Lock()  # prevents concurrent swap checks
 
 def _best_replacement(exclude_tickers: list) -> tuple[str | None, float]:
     best_ticker, best_score, best_price = None, -99, 0.0
-    for ticker in CANDIDATE_POOL:
+    for ticker in ALL_STOCKS:
         if ticker in exclude_tickers:
             continue
         try:
