@@ -847,17 +847,6 @@ def get_stock(ticker: str):
 
 @app.get("/api/stocks")
 def get_all_stocks():
-    import traceback, time
-    global ACTIVE_WATCHLIST, _last_refresh_ts
-    try:
-        return _get_all_stocks_inner()
-    except Exception:
-        tb = traceback.format_exc()
-        print("[/api/stocks] UNHANDLED EXCEPTION:\n" + tb)
-        from fastapi.responses import JSONResponse
-        return JSONResponse(status_code=500, content={"error": tb})
-
-def _get_all_stocks_inner():
     global ACTIVE_WATCHLIST, _last_refresh_ts
     import time
     # Trigger a swap check in the background if it hasn't run in the last hour
@@ -898,19 +887,6 @@ def _get_all_stocks_inner():
 def get_replacements():
     return _load_replacements()
 
-@app.get("/api/debug")
-def debug_state():
-    from fastapi.responses import PlainTextResponse
-    import traceback
-    try:
-        lines = [f"watchlist ({len(ACTIVE_WATCHLIST)} entries):"]
-        for e in ACTIVE_WATCHLIST:
-            lines.append(f"  {e}")
-        lines.append(f"gist_enabled: {_gist_enabled()}")
-        lines.append(f"gist_cache_keys: {list(_gist_cache.keys())}")
-        return PlainTextResponse("\n".join(lines))
-    except Exception:
-        return PlainTextResponse(traceback.format_exc(), status_code=500)
 
 @app.get("/api/search")
 def search_tickers(q: str = Query(default="", min_length=1)):
