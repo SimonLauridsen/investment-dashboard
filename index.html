@@ -1187,6 +1187,8 @@ async function refreshAll() {
       fetch(`${API}/api/stocks`),
       fetch(`${API}/api/replacements`),
     ]);
+    if (res.url.includes('/login')) { window.location.href = '/login'; return; }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const stocks = await res.json();
     replacementsLog = await repRes.json().catch(() => []);
     watchlistOrder = stocks.filter(s=>!s.error).map(s=>s.ticker);
@@ -1224,7 +1226,7 @@ async function refreshAll() {
       if(first){selectStock(first.ticker,'watchlist');}
     }
   } catch(e) {
-    document.getElementById('last-update').textContent='Connection error — retrying in 10s...';
+    document.getElementById('last-update').textContent=`Error: ${e.message} — retrying in 10s...`;
     document.getElementById('live-dot').style.background='#ef4444';
     setTimeout(refreshAll, 10000);
   }
