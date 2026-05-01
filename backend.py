@@ -10,6 +10,7 @@ from pathlib import Path
 import json, os, hmac, hashlib, base64, threading
 import urllib.request
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
 SECRET_KEY  = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
@@ -506,6 +507,45 @@ CANDIDATE_POOL = {
 
 ALL_STOCKS = {**STOCKS, **CANDIDATE_POOL}
 
+# ── Dynamic universe: index constituents scanned at swap time ─────────────────
+_OMX_C25 = [
+    "NOVO-B.CO", "MAERSK-B.CO", "CARL-B.CO", "DEMANT.CO", "GMAB.CO",
+    "NZYM-B.CO", "BAVA.CO", "GN.CO", "PNDORA.CO", "RBREW.CO",
+    "VWS.CO", "FLS.CO", "TRYG.CO", "DANSKE.CO", "JYSK.CO",
+    "NDA-DK.CO", "ALK-B.CO", "AMBU-B.CO", "ROCK-B.CO", "NETC.CO",
+    "ISS.CO", "SYDB.CO",
+]
+_OBX = [
+    "EQNR.OL", "DNB.OL", "MOWI.OL", "TEL.OL", "YAR.OL",
+    "KOG.OL", "AKRBP.OL", "NHY.OL", "STB.OL", "GJF.OL",
+    "LSG.OL", "SALM.OL", "SUBC.OL", "BRG.OL", "AUTO.OL",
+    "AKER.OL", "TOM.OL", "NOD.OL", "ELK.OL",
+]
+_OMXS30 = [
+    "ATCO-B.ST", "AZN.ST", "ERIC-B.ST", "ESSITY-B.ST", "HM-B.ST",
+    "NDA-SE.ST", "SCA-B.ST", "SEB-A.ST", "SHB-A.ST", "SKF-B.ST",
+    "SSAB-A.ST", "SWED-A.ST", "TEL2-B.ST", "VOLV-B.ST", "ASSA-B.ST",
+    "BOL.ST", "EPIR.ST", "GETI-B.ST",
+]
+_SP100 = [
+    "AAPL", "MSFT", "AMZN", "GOOGL", "META", "NVDA", "TSLA",
+    "JPM", "JNJ", "V", "WMT", "PG", "MA", "UNH", "HD",
+    "BAC", "XOM", "CVX", "ABBV", "PFE", "COST", "TMO",
+    "AVGO", "CSCO", "ACN", "ABT", "MRK", "LIN", "NKE",
+    "QCOM", "TXN", "AMGN", "SBUX", "ORCL", "MDT", "HON",
+    "IBM", "GE", "BA", "CAT", "GS", "MS", "BLK", "SPGI",
+    "ISRG", "GILD", "VRTX", "REGN", "SLB", "MO", "PM",
+    "KO", "PEP", "LOW", "TGT", "NFLX", "T", "VZ", "CMCSA",
+    "NEE", "WFC", "C", "CME", "SCHW", "ADBE", "CRM",
+    "INTC", "AMD", "NOW", "BKNG", "AXP", "DHR", "MCD",
+    "BMY", "RTX", "LMT", "NOC", "DE", "ETN", "ITW",
+]
+# Deduplicated, excludes any ticker already in ALL_STOCKS
+DYNAMIC_UNIVERSE: list[str] = [
+    t for t in dict.fromkeys(_OMX_C25 + _OBX + _OMXS30 + _SP100)
+    if t not in ALL_STOCKS
+]
+
 # ── Active watchlist ───────────────────────────────────────────────────────────
 WATCHLIST_FILE    = Path("watchlist.json")
 REPLACEMENTS_FILE = Path("replacements.json")
@@ -911,22 +951,50 @@ def serve_index():
 _last_refresh_ts = 0.0           # unix timestamp of last completed check
 _refresh_lock    = threading.Lock()  # prevents concurrent swap checks
 
+# Per-ticker score cache to avoid re-fetching the full universe on each swap
+_universe_cache: dict = {}       # ticker -> {"score": int, "price": float, "ts": float}
+_UNIVERSE_CACHE_TTL = 3600       # seconds
+
+def _score_ticker(ticker: str):
+    """Returns (ticker, score, price) or None on failure. Used by ThreadPoolExecutor."""
+    import time
+    try:
+        data = _fetch_stock_data(ticker)
+        if data.get("error"):
+            return None
+        return ticker, data["signal"]["score"], data.get("price", 0.0)
+    except Exception:
+        return None
+
 def _best_replacement(exclude_tickers: list) -> tuple[str | None, float]:
-    best_ticker, best_score, best_price = None, -99, 0.0
-    for ticker in ALL_STOCKS:
-        if ticker in exclude_tickers:
+    import time
+    now = time.time()
+
+    full_universe = list(dict.fromkeys(list(ALL_STOCKS.keys()) + DYNAMIC_UNIVERSE))
+    candidates    = [t for t in full_universe if t not in exclude_tickers]
+
+    fresh  = {t: _universe_cache[t] for t in candidates
+              if t in _universe_cache and now - _universe_cache[t]["ts"] < _UNIVERSE_CACHE_TTL}
+    stale  = [t for t in candidates if t not in fresh]
+
+    if stale:
+        print(f"[universe-scan] Scoring {len(stale)} tickers ({len(fresh)} cached)...")
+        with ThreadPoolExecutor(max_workers=20) as ex:
+            for result in ex.map(_score_ticker, stale):
+                if result:
+                    t, score, price = result
+                    _universe_cache[t] = {"score": score, "price": price, "ts": now}
+
+    best_ticker, best_score, best_price = None, 0, 0.0
+    for t in candidates:
+        entry = _universe_cache.get(t)
+        if not entry:
             continue
-        try:
-            data = _fetch_stock_data(ticker)
-            if data.get("error"):
-                continue
-            score = data["signal"]["score"]
-            if score > best_score:
-                best_score  = score
-                best_ticker = ticker
-                best_price  = data.get("price", 0.0)
-        except Exception:
-            continue
+        if entry["score"] > best_score:
+            best_score  = entry["score"]
+            best_ticker = t
+            best_price  = entry["price"]
+
     if best_score >= 1:
         return best_ticker, best_price
     return None, 0.0
