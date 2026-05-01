@@ -1224,8 +1224,9 @@ async function refreshAll() {
       if(first){selectStock(first.ticker,'watchlist');}
     }
   } catch(e) {
-    document.getElementById('last-update').textContent='Connection error — retrying...';
+    document.getElementById('last-update').textContent='Connection error — retrying in 10s...';
     document.getElementById('live-dot').style.background='#ef4444';
+    setTimeout(refreshAll, 10000);
   }
 }
 
@@ -1558,7 +1559,7 @@ async function importNordnetPositions() {
   await Promise.all([fetchCustomList(), fetchPositions()]);
   renderSearchSchedule();
   updateCustomCount();
-  await refreshAll();
+  refreshAll();
   setInterval(refreshAll, 60000);
 })();
 </script>
