@@ -531,10 +531,10 @@ def _load_watchlist() -> list:
             launch_date = "2026-04-24" if item in STOCKS else today
             result.append({"ticker": item, "added_date": launch_date, "price_at_add": None})
         else:
-            # Correct added_date for original picks that were migrated with today's date
-            if item.get("ticker") in STOCKS and item.get("added_date", "") > "2026-04-24":
-                item["added_date"] = "2026-04-24"
-                item["price_at_add"] = None  # force re-lookup at correct date
+            # Sanitize NaN price_at_add (not JSON-safe, causes 500)
+            p = item.get("price_at_add")
+            if p is not None and p != p:  # NaN check
+                item["price_at_add"] = None
             result.append(item)
     return result
 
@@ -554,7 +554,9 @@ def _price_on_date(ticker: str, date_str: str) -> float:
         end   = start + timedelta(days=5)
         hist  = yf.Ticker(ticker).history(start=str(start), end=str(end))
         if not hist.empty:
-            return round(float(hist["Close"].iloc[0]), 4)
+            val = float(hist["Close"].iloc[0])
+            if not (val != val):  # NaN check (NaN != NaN is True)
+                return round(val, 4)
     except Exception:
         pass
     return 0.0
@@ -873,7 +875,8 @@ def _get_all_stocks_inner():
                 continue
             # Lazily record price_at_add on first fetch after a stock is added
             if not entry.get("price_at_add"):
-                p = _price_on_date(ticker, entry["added_date"]) or data["price"]
+                p = _price_on_date(ticker, entry["added_date"])
+                p = p if (p and p == p) else data["price"]  # reject 0 and NaN
                 entry["price_at_add"] = round(p, 4)
                 wl_changed = True
             p0 = entry["price_at_add"]
