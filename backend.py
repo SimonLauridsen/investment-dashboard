@@ -897,18 +897,17 @@ def get_replacements():
 
 @app.get("/api/debug")
 def debug_state():
+    from fastapi.responses import PlainTextResponse
     import traceback
-    results = []
-    for entry in ACTIVE_WATCHLIST:
-        ticker = entry["ticker"]
-        try:
-            tk = yf.Ticker(ticker)
-            hist = tk.history(period="3mo", interval="1d")
-            results.append({"ticker": ticker, "rows": len(hist), "empty": hist.empty,
-                             "added_date": entry.get("added_date"), "price_at_add": entry.get("price_at_add")})
-        except Exception as e:
-            results.append({"ticker": ticker, "error": str(e), "tb": traceback.format_exc()})
-    return {"watchlist": ACTIVE_WATCHLIST, "yfinance_check": results}
+    try:
+        lines = [f"watchlist ({len(ACTIVE_WATCHLIST)} entries):"]
+        for e in ACTIVE_WATCHLIST:
+            lines.append(f"  {e}")
+        lines.append(f"gist_enabled: {_gist_enabled()}")
+        lines.append(f"gist_cache_keys: {list(_gist_cache.keys())}")
+        return PlainTextResponse("\n".join(lines))
+    except Exception:
+        return PlainTextResponse(traceback.format_exc(), status_code=500)
 
 @app.get("/api/search")
 def search_tickers(q: str = Query(default="", min_length=1)):
