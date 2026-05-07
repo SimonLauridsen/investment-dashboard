@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, date
 from pathlib import Path
-import json, os, hmac, hashlib, base64, threading
+import json, os, hmac, hashlib, base64, threading, re
 import urllib.request
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
@@ -44,7 +44,11 @@ def _gist_fetch_all():
         with _gist_lock:
             for filename, file_info in gist_data.get("files", {}).items():
                 try:
-                    _gist_cache[filename] = json.loads(file_info.get("content", "null"))
+                    content = file_info.get("content", "null")
+                    # Python's json.dumps(allow_nan=True) writes bare NaN/Infinity tokens
+                    # which are not valid JSON. Salvage them by mapping to null.
+                    content = re.sub(r'\b(NaN|-?Infinity)\b', 'null', content)
+                    _gist_cache[filename] = json.loads(content)
                 except Exception:
                     pass
         print(f"[gist] Loaded {len(_gist_cache)} files from Gist")
@@ -587,6 +591,13 @@ def _save_watchlist(wl: list):
 def _wl_tickers() -> list:
     return [e["ticker"] for e in ACTIVE_WATCHLIST]
 
+def _safe_price(val, ndigits: int = 4):
+    """Round val to ndigits. Returns None if val is None or NaN (NaN is truthy, so plain
+    `if val` doesn't catch it — always use this helper when persisting prices)."""
+    if val is None or val != val:  # NaN != NaN is True
+        return None
+    return round(float(val), ndigits)
+
 def _price_on_date(ticker: str, date_str: str) -> float:
     try:
         from datetime import timedelta
@@ -749,7 +760,6 @@ def nordnet_url(ticker: str, company_name: str, exchange_code: str) -> str | Non
     exc = EXCHANGE_TO_NORDNET.get(exchange_code)
     if exc is None:
         return None
-    import re
     clean_ticker = re.sub(r'\.[A-Z]{1,2}$', '', ticker).lower()
     drop = r"\b(inc\.?|corp\.?|ltd\.?|llc\.?|plc\.?|ag|sa|nv|n\.v\.?|bv|b\.v\.?|asa|a\.s\.?|a/s|oyj|ab|holdings?|group|co\.?)\b"
     slug = re.sub(drop, "", company_name.lower())
@@ -904,9 +914,8 @@ def get_all_stocks():
                 continue
             # Lazily record price_at_add on first fetch after a stock is added
             if not entry.get("price_at_add"):
-                p = _price_on_date(ticker, entry["added_date"])
-                p = p if (p and p == p) else data["price"]  # reject 0 and NaN
-                entry["price_at_add"] = round(p, 4)
+                p = _price_on_date(ticker, entry["added_date"]) or data["price"]
+                entry["price_at_add"] = _safe_price(p) or _safe_price(data["price"])
                 wl_changed = True
             p0 = entry["price_at_add"]
             p1 = data["price"]
@@ -1043,7 +1052,7 @@ def _do_check_and_refresh():
                 ACTIVE_WATCHLIST[i] = {
                     "ticker":       replacement,
                     "added_date":   today,
-                    "price_at_add": round(repl_price, 4) if repl_price else None,
+                    "price_at_add": _safe_price(repl_price),
                 }
                 log.append({
                     "removed":              ticker,
@@ -1052,7 +1061,7 @@ def _do_check_and_refresh():
                     "date":                 today,
                     "removed_added_date":   entry.get("added_date"),
                     "removed_price_at_add": entry.get("price_at_add"),
-                    "removed_price_exit":   round(data["price"], 4) if data.get("price") else None,
+                    "removed_price_exit":   _safe_price(data.get("price")),
                 })
                 print(f"[auto-refresh] Replaced {ticker} → {replacement}: {reason}")
                 changed = True
