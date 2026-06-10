@@ -598,6 +598,17 @@ def _safe_price(val, ndigits: int = 4):
         return None
     return round(float(val), ndigits)
 
+def _safe_float(val, ndigits: int = 4, default: float = 0.0) -> float:
+    """Return a JSON-safe float. Converts NaN/inf to default (starlette JSONResponse
+    uses allow_nan=False, so bare NaN in a response dict causes a 500)."""
+    try:
+        f = float(val)
+        if f != f or f == float("inf") or f == float("-inf"):  # NaN or inf
+            return default
+        return round(f, ndigits) if ndigits is not None else f
+    except (TypeError, ValueError):
+        return default
+
 def _price_on_date(ticker: str, date_str: str) -> float:
     try:
         from datetime import timedelta
@@ -848,7 +859,7 @@ def _fetch_stock_data(ticker: str) -> dict:
     sma50 = float(prices.rolling(50).mean().iloc[-1]) if len(prices) >= 50 else 0
     signal = generate_signal(rsi, macd_hist, current_price, bb_upper, bb_lower, sma20, sma50)
     chart_data = [
-        {"date": str(d.date()), "close": round(float(c), 4), "volume": int(v)}
+        {"date": str(d.date()), "close": _safe_float(c, 4), "volume": int(v) if v == v else 0}
         for d, c, v in zip(hist.index, hist["Close"], hist["Volume"])
     ]
     info = ALL_STOCKS.get(ticker, {})
@@ -869,18 +880,18 @@ def _fetch_stock_data(ticker: str) -> dict:
         "catalyst_event": info.get("catalyst_event", ""),
         "catalyst_note": info.get("catalyst_note", ""),
         "currency": info_raw.get("currency", "USD"),
-        "price": round(current_price, 2),
-        "change_pct": change_pct,
-        "market_cap": market_cap,
-        "rsi": rsi,
-        "macd": macd_val,
-        "macd_signal": macd_sig,
-        "macd_hist": macd_hist,
-        "bb_upper": bb_upper,
-        "bb_mid": bb_mid,
-        "bb_lower": bb_lower,
-        "sma20": round(sma20, 2),
-        "sma50": round(sma50, 2),
+        "price": _safe_float(current_price, 2),
+        "change_pct": _safe_float(change_pct, 2),
+        "market_cap": int(market_cap) if market_cap and market_cap == market_cap else 0,
+        "rsi": _safe_float(rsi, 2, default=50.0),
+        "macd": _safe_float(macd_val),
+        "macd_signal": _safe_float(macd_sig),
+        "macd_hist": _safe_float(macd_hist),
+        "bb_upper": _safe_float(bb_upper),
+        "bb_mid": _safe_float(bb_mid),
+        "bb_lower": _safe_float(bb_lower),
+        "sma20": _safe_float(sma20, 2),
+        "sma50": _safe_float(sma50, 2),
         "signal": signal,
         "chart_data": chart_data,
         "nordnet_url": nn_url,
