@@ -848,7 +848,9 @@ def _fetch_stock_data(ticker: str) -> dict:
     hist = tk.history(period="3mo", interval="1d")
     if hist.empty:
         return {"error": "No data"}
-    prices = hist["Close"]
+    prices = hist["Close"].dropna()
+    if prices.empty:
+        return {"error": "No price data", "ticker": ticker}
     current_price = float(prices.iloc[-1])
     prev_price = float(prices.iloc[-2]) if len(prices) > 1 else current_price
     change_pct = round((current_price - prev_price) / prev_price * 100, 2)
