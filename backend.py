@@ -863,6 +863,7 @@ def _fetch_stock_data(ticker: str) -> dict:
     chart_data = [
         {"date": str(d.date()), "close": _safe_float(c, 4), "volume": int(v) if v == v else 0}
         for d, c, v in zip(hist.index, hist["Close"], hist["Volume"])
+        if c == c  # skip NaN closes — they become 0.0 which distorts the chart
     ]
     info = ALL_STOCKS.get(ticker, {})
     info_raw = tk.info or {}
