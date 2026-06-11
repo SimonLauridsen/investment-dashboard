@@ -698,7 +698,7 @@ function renderWatchlistGrid() {
   const grid = document.getElementById('watchlist-grid');
   grid.innerHTML='';
   const stocks = watchlistOrder.map(t=>watchlistData[t]).filter(Boolean);
-  if (!stocks.length) { grid.innerHTML='<div class="card p-6 text-center" style="grid-column:1/-1;color:var(--muted)">Loading...</div>'; return; }
+  if (!stocks.length) { grid.innerHTML='<div class="card p-6 text-center" style="grid-column:1/-1;color:var(--muted)">No watchlist data — try refreshing.</div>'; return; }
 
   // Build compounded slot values: chain each stock's return through its predecessors
   const predMap   = buildPredecessorMap(replacementsLog);
@@ -741,6 +741,13 @@ function renderWatchlistGrid() {
   }
 
   stocks.forEach(s => {
+    if (s.error) {
+      const errCard = document.createElement('div');
+      errCard.className = 'card p-4';
+      errCard.innerHTML = `<div style="font-weight:600;margin-bottom:4px">${s.ticker||'Unknown'}</div><div style="color:#ef4444;font-size:12px">${s.error}</div>`;
+      grid.appendChild(errCard);
+      return;
+    }
     const card = buildCard(s, 'watchlist', false, slotData[s.ticker]);
     grid.appendChild(card);
     requestAnimationFrame(()=>miniSparkline(`spark-watchlist-${s.ticker}`, s.chart_data, tickerColor(s.ticker)));
@@ -1191,8 +1198,8 @@ async function refreshAll() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const stocks = await res.json();
     replacementsLog = await repRes.json().catch(() => []);
-    watchlistOrder = stocks.filter(s=>!s.error).map(s=>s.ticker);
-    stocks.forEach(s=>{ if(!s.error) watchlistData[s.ticker]=s; });
+    watchlistOrder = stocks.map(s=>s.ticker).filter(Boolean);
+    stocks.forEach(s=>{ if(s.ticker) watchlistData[s.ticker]=s; });
     await renderReplacements();
 
     // Custom tickers (refresh existing data)
